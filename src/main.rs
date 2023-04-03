@@ -159,40 +159,52 @@ pub fn move_to_click(
         None => return,
     };
     for (mut transform, mut player, mut dash) in player_query.iter_mut() {
-        println!("dash cooldown: {:?}", dash.cooldown_timer);
         let current_position = player.position;
         let direction = target.position - current_position;
         let distance_to_target = direction.length();
 
-        if keyboard.just_pressed(KeyCode::E) && dash.cooldown_timer <= 0.0 {
+        if keyboard.just_pressed(KeyCode::E) && dash.cooldown_timer <= 0.0 && !dash.is_dashing {
             dash.cooldown_timer = dash.cooldown;
-
             dash.is_dashing = true;
             dash.original_target_position = target.position;
             dash.started_moving = distance_to_target > dash.max_dash_distance;
-            dash.started_jumping = !player.on_ground; // Update this line
-            if player.facing_right {
-                target.position.x += 250.0;
-            } else {
-                target.position.x -= 250.0;
-            }
+            dash.started_jumping = !player.on_ground;
         }
 
-        let player_speed = 200.0;
-        let dash_speed = 500.0;
-
-        if distance_to_target > 0.0 {
-            let normalized_direction = direction / distance_to_target;
-
-            let movement = if dash.is_dashing {
-                normalized_direction * dash_speed * time.delta_seconds()
+        if dash.is_dashing {
+            let dash_direction = if player.facing_right {
+                Vec2::new(1.0, 0.0)
             } else {
-                normalized_direction * player_speed * time.delta_seconds()
+                Vec2::new(-1.0, 0.0)
             };
+            let dash_speed = 500.0;
+            let movement = dash_direction * dash_speed * time.delta_seconds();
 
+            player.position += movement;
+            dash.distance_dashed += movement.length();
+
+            if dash.distance_dashed >= dash.max_dash_distance {
+                dash.is_dashing = false;
+                dash.distance_dashed = 0.0;
+                // Set the target position based on whether the player started moving or standing still
+                if dash.started_moving {
+                    target.position = dash.original_target_position;
+                } else {
+                    target.position = player.position;
+                }
+            }
+        } else if distance_to_target > 0.0 {
+            let player_speed = 200.0;
+            let normalized_direction = direction / distance_to_target;
+            let movement = normalized_direction * player_speed * time.delta_seconds();
+
+            if movement.length() < distance_to_target {
+                player.position += movement;
+            } else {
+                player.position = target.position;
+            }
             let horizontal_movement = movement.x.abs() > f32::EPSILON;
-
-            // Update the player's facing direction based on the target position and horizontal movement
+            let normalized_direction = direction / distance_to_target;
             if horizontal_movement {
                 if normalized_direction.x > 0.0 {
                     player.facing_right = true;
@@ -200,30 +212,9 @@ pub fn move_to_click(
                     player.facing_right = false;
                 }
             }
-
-            if movement.length() < distance_to_target {
-                player.position += movement;
-            } else {
-                player.position = target.position;
-            }
-
-            if dash.is_dashing {
-                dash.distance_dashed += movement.length();
-                if dash.distance_dashed >= dash.max_dash_distance {
-                    dash.is_dashing = false;
-                    dash.distance_dashed = 0.0;
-                    // Set the target position based on whether the player started moving or standing still
-                    if dash.started_moving {
-                        target.position = dash.original_target_position;
-                    } else {
-                        target.position = player.position;
-                    }
-                }
-            }
         }
 
-        const GROUND_THRESHOLD: f32 = 3.0;
-
+        // Apply gravity and vertical velocity
         let gravity = -1000.0; // Change this value to control gravity strength
 
         if dash.is_dashing && !player.on_ground {
@@ -235,19 +226,19 @@ pub fn move_to_click(
         player.position.y += player.vertical_velocity * time.delta_seconds();
 
         // Prevent the player from going below the ground
-        if player.position.y <= ground_y + GROUND_THRESHOLD {
+        if player.position.y <= ground_y + 4.0 {
             player.position.y = ground_y;
-            if !player.on_ground {
-                player.jumps_taken = 0; // Reset jumps_taken when the player lands
-            }
-            player.on_ground = true; // Set on_ground to true
+            player.vertical_velocity = 0.0;
+            player.jumps_taken = 0;
+            player.on_ground = true;
         } else {
-            player.on_ground = false; // Set on_ground to false
+            player.on_ground = false;
         }
 
-        // Reset vertical velocity if the player is on the ground
-        if player.on_ground {
-            player.vertical_velocity = 0.0;
+        // Turn off dashing when the dash ends in the air
+        if dash.is_dashing && dash.distance_dashed >= dash.max_dash_distance {
+            dash.is_dashing = false;
+            dash.distance_dashed = 0.0;
         }
 
         transform.translation = Vec3::new(player.position.x, player.position.y, 0.0);
