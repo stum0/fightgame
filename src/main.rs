@@ -1,4 +1,5 @@
 use bevy::{
+    math::vec2,
     prelude::*,
     render::render_resource::{Extent3d, Texture, TextureDimension, TextureFormat},
     sprite::MaterialMesh2dBundle,
@@ -82,6 +83,7 @@ fn setup(
             max_dash_distance: 100.0,
             cooldown: 5.0,
             cooldown_timer: 0.0,
+            original_target_position: Vec2::ZERO,
         },
         Velocity(Vec3::ZERO),
     ));
@@ -110,6 +112,7 @@ pub struct Dash {
     pub max_dash_distance: f32,
     pub cooldown: f32,
     pub cooldown_timer: f32,
+    pub original_target_position: Vec2,
 }
 
 pub fn movement(
@@ -143,22 +146,48 @@ pub fn move_to_click(
     time: Res<Time>,
     keyboard: Res<Input<KeyCode>>,
 ) {
-    let target = match target_query.iter_mut().next() {
+    let mut target = match target_query.iter_mut().next() {
         Some(target) => target,
         None => return,
     };
-    for (mut transform, mut player, mut _dash) in player_query.iter_mut() {
-        // println!("dash cooldown: {:?}", dash.cooldown_timer);
+    for (mut transform, mut player, mut dash) in player_query.iter_mut() {
+        println!("dash cooldown: {:?}", dash.cooldown_timer);
         let current_position = player.position;
         let direction = target.position - current_position;
         let distance_to_target = direction.length();
 
+        if keyboard.just_pressed(KeyCode::E) && dash.cooldown_timer <= 0.0 {
+            dash.cooldown_timer = dash.cooldown;
+
+            if distance_to_target > 0.0 {
+                dash.is_dashing = true;
+                dash.original_target_position = target.position;
+                if player.facing_right {
+                    target.position.x += 200.0;
+                } else {
+                    target.position.x -= 200.0;
+                }
+            } else {
+                let dash_distance = 200.0;
+                if player.facing_right {
+                    player.position.x += dash_distance;
+                } else {
+                    player.position.x -= dash_distance;
+                }
+            }
+        }
+
         let player_speed = 200.0;
+        let dash_speed = 400.0;
 
         if distance_to_target > 0.0 {
             let normalized_direction = direction / distance_to_target;
 
-            let movement = normalized_direction * player_speed * time.delta_seconds();
+            let movement = if dash.is_dashing {
+                normalized_direction * dash_speed * time.delta_seconds()
+            } else {
+                normalized_direction * player_speed * time.delta_seconds()
+            };
 
             let horizontal_movement = movement.x.abs() > f32::EPSILON;
 
@@ -171,12 +200,20 @@ pub fn move_to_click(
                 }
             }
 
-            let movement = normalized_direction * player_speed * time.delta_seconds();
-
             if movement.length() < distance_to_target {
                 player.position += movement;
             } else {
                 player.position = target.position;
+            }
+
+            if dash.is_dashing {
+                dash.distance_dashed += movement.length();
+                if dash.distance_dashed >= dash.max_dash_distance {
+                    dash.is_dashing = false;
+                    dash.distance_dashed = 0.0;
+                    // Restore the original target position
+                    target.position = dash.original_target_position;
+                }
             }
         }
 
