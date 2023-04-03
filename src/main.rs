@@ -73,6 +73,7 @@ fn setup(
             vertical_velocity: Vec2::ZERO.y,
             jumps_taken: 0,
             facing_right: true,
+            on_ground: true,
         },
         Target {
             position: Vec2::new(-width / 4.0, height),
@@ -80,10 +81,12 @@ fn setup(
         Dash {
             is_dashing: false,
             distance_dashed: 0.0,
-            max_dash_distance: 100.0,
-            cooldown: 5.0,
+            max_dash_distance: 250.0,
+            cooldown: 3.0,
             cooldown_timer: 0.0,
             original_target_position: Vec2::ZERO,
+            started_moving: false,
+            started_jumping: false,
         },
         Velocity(Vec3::ZERO),
     ));
@@ -95,6 +98,7 @@ pub struct Player {
     pub vertical_velocity: f32,
     pub jumps_taken: u32,
     pub facing_right: bool,
+    pub on_ground: bool,
 }
 
 #[derive(Default, Component)]
@@ -113,6 +117,8 @@ pub struct Dash {
     pub cooldown: f32,
     pub cooldown_timer: f32,
     pub original_target_position: Vec2,
+    pub started_moving: bool,
+    pub started_jumping: bool,
 }
 
 pub fn movement(
@@ -146,6 +152,8 @@ pub fn move_to_click(
     time: Res<Time>,
     keyboard: Res<Input<KeyCode>>,
 ) {
+    let ground_y = -ARENA_HEIGHT / 4.0;
+
     let mut target = match target_query.iter_mut().next() {
         Some(target) => target,
         None => return,
@@ -159,26 +167,19 @@ pub fn move_to_click(
         if keyboard.just_pressed(KeyCode::E) && dash.cooldown_timer <= 0.0 {
             dash.cooldown_timer = dash.cooldown;
 
-            if distance_to_target > 0.0 {
-                dash.is_dashing = true;
-                dash.original_target_position = target.position;
-                if player.facing_right {
-                    target.position.x += 200.0;
-                } else {
-                    target.position.x -= 200.0;
-                }
+            dash.is_dashing = true;
+            dash.original_target_position = target.position;
+            dash.started_moving = distance_to_target > dash.max_dash_distance;
+            dash.started_jumping = !player.on_ground; // Update this line
+            if player.facing_right {
+                target.position.x += 250.0;
             } else {
-                let dash_distance = 200.0;
-                if player.facing_right {
-                    player.position.x += dash_distance;
-                } else {
-                    player.position.x -= dash_distance;
-                }
+                target.position.x -= 250.0;
             }
         }
 
         let player_speed = 200.0;
-        let dash_speed = 400.0;
+        let dash_speed = 500.0;
 
         if distance_to_target > 0.0 {
             let normalized_direction = direction / distance_to_target;
@@ -211,37 +212,51 @@ pub fn move_to_click(
                 if dash.distance_dashed >= dash.max_dash_distance {
                     dash.is_dashing = false;
                     dash.distance_dashed = 0.0;
-                    // Restore the original target position
-                    target.position = dash.original_target_position;
+                    // Set the target position based on whether the player started moving or standing still
+                    if dash.started_moving {
+                        target.position = dash.original_target_position;
+                    } else {
+                        target.position = player.position;
+                    }
                 }
             }
         }
 
         // Apply gravity and vertical velocity
-        let gravity = -600.0; // Change this value to control gravity strength
+        let gravity = -500.0; // Change this value to control gravity strength
         player.vertical_velocity += gravity * time.delta_seconds();
+        if dash.is_dashing && dash.started_jumping {
+            player.vertical_velocity += gravity * time.delta_seconds() * 10.0;
+        } else {
+            player.vertical_velocity += gravity * time.delta_seconds();
+        }
         player.position.y += player.vertical_velocity * time.delta_seconds();
 
         // Prevent the player from going below the ground
-        let ground_y = -ARENA_HEIGHT / 4.0;
-        // Add a small buffer to the ground check
+        // Reduce the threshold value
         if player.position.y <= ground_y {
             player.position.y = ground_y;
             player.vertical_velocity = 0.0;
-            player.jumps_taken = 0; // Reset the jumps_taken field
+            player.jumps_taken = 0;
+            player.on_ground = true; // Set on_ground to true
+        } else {
+            player.on_ground = false; // Set on_ground to false
         }
 
         transform.translation = Vec3::new(player.position.x, player.position.y, 0.0);
     }
 }
 
-pub fn jumping(keyboard: Res<Input<KeyCode>>, mut player_query: Query<&mut Player>) {
+pub fn jumping(
+    keyboard: Res<Input<KeyCode>>,
+    mut player_query: Query<&mut Player>,
+    time: Res<Time>,
+) {
+    let db = time.delta_seconds();
     for mut player in player_query.iter_mut() {
-        if keyboard.just_pressed(KeyCode::Space) {
-            if player.jumps_taken < 2 {
-                player.vertical_velocity = 400.0; // Change this value to control jump height
-                player.jumps_taken += 1;
-            }
+        if keyboard.just_pressed(KeyCode::Space) && player.jumps_taken < 2 {
+            player.vertical_velocity = 500.0; // Change this value to control jump height
+            player.jumps_taken += 1;
         }
     }
 }
