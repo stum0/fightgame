@@ -222,37 +222,39 @@ pub fn move_to_click(
             }
         }
 
-        // Apply gravity and vertical velocity
-        let gravity = -500.0; // Change this value to control gravity strength
-        player.vertical_velocity += gravity * time.delta_seconds();
-        if dash.is_dashing && dash.started_jumping {
-            player.vertical_velocity += gravity * time.delta_seconds() * 10.0;
+        const GROUND_THRESHOLD: f32 = 3.0;
+
+        let gravity = -1000.0; // Change this value to control gravity strength
+
+        if dash.is_dashing && !player.on_ground {
+            player.vertical_velocity *= 0.1;
         } else {
             player.vertical_velocity += gravity * time.delta_seconds();
         }
+
         player.position.y += player.vertical_velocity * time.delta_seconds();
 
         // Prevent the player from going below the ground
-        // Reduce the threshold value
-        if player.position.y <= ground_y {
+        if player.position.y <= ground_y + GROUND_THRESHOLD {
             player.position.y = ground_y;
-            player.vertical_velocity = 0.0;
-            player.jumps_taken = 0;
+            if !player.on_ground {
+                player.jumps_taken = 0; // Reset jumps_taken when the player lands
+            }
             player.on_ground = true; // Set on_ground to true
         } else {
             player.on_ground = false; // Set on_ground to false
+        }
+
+        // Reset vertical velocity if the player is on the ground
+        if player.on_ground {
+            player.vertical_velocity = 0.0;
         }
 
         transform.translation = Vec3::new(player.position.x, player.position.y, 0.0);
     }
 }
 
-pub fn jumping(
-    keyboard: Res<Input<KeyCode>>,
-    mut player_query: Query<&mut Player>,
-    time: Res<Time>,
-) {
-    let db = time.delta_seconds();
+pub fn jumping(keyboard: Res<Input<KeyCode>>, mut player_query: Query<&mut Player>) {
     for mut player in player_query.iter_mut() {
         if keyboard.just_pressed(KeyCode::Space) && player.jumps_taken < 2 {
             player.vertical_velocity = 500.0; // Change this value to control jump height
