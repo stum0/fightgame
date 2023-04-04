@@ -1,4 +1,4 @@
-use bevy::{prelude::*, render::camera::ScalingMode, sprite::MaterialMesh2dBundle, window::Window};
+use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 
 fn main() {
     let mut app = App::new();
@@ -32,8 +32,8 @@ enum AppState {
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    // mut meshes: ResMut<Assets<Mesh>>,
+    // mut materials: ResMut<Assets<ColorMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
     let mut camera_bundle = Camera2dBundle::default();
@@ -96,12 +96,13 @@ pub fn movement(
             if let Some(cursor) = window.cursor_position() {
                 if mouse.pressed(MouseButton::Left)
                     || mouse.pressed(MouseButton::Right)
-                    || touches.any_just_pressed()
+                    || touches.just_pressed(0)
                 {
                     let (camera, camera_transform) = camera_query.single();
                     let world_position =
                         window_to_world_coordinates(&window, camera, camera_transform, cursor);
-                    target.position.x = world_position.x; // Only update the x position
+                    //target.position.x = world_position.x; // Only update the x position
+                    target.position = world_position;
                 }
             }
         }
@@ -129,7 +130,7 @@ pub fn move_to_click(
     mut player_query: Query<(&mut Transform, &mut Player)>,
     mut target_query: Query<&mut Target>,
     time: Res<Time>,
-    keyboard: Res<Input<KeyCode>>,
+    //keyboard: Res<Input<KeyCode>>,
 ) {
     let target = match target_query.iter_mut().next() {
         Some(target) => target,
