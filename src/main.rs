@@ -1,11 +1,4 @@
-use bevy::{
-    prelude::*,
-    sprite::MaterialMesh2dBundle,
-    window::{Window, WindowResolution},
-};
-
-const ARENA_WIDTH: f32 = 1280.0;
-const ARENA_HEIGHT: f32 = 800.0;
+use bevy::{prelude::*, render::camera::ScalingMode, sprite::MaterialMesh2dBundle, window::Window};
 
 fn main() {
     let mut app = App::new();
@@ -17,7 +10,8 @@ fn main() {
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "SwordGame".to_string(),
-            resolution: WindowResolution::new(ARENA_WIDTH, ARENA_HEIGHT),
+            fit_canvas_to_parent: true,
+            prevent_default_event_handling: false,
             ..Default::default()
         }),
         ..Default::default()
@@ -42,33 +36,38 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
-    commands.spawn(Camera2dBundle::default());
+    let mut camera_bundle = Camera2dBundle::default();
+    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
+    commands.spawn(camera_bundle);
 
-    let width = ARENA_WIDTH;
-    let height = -ARENA_HEIGHT / 4.0;
+    // commands.spawn(MaterialMesh2dBundle {
+    //     mesh: meshes
+    //         .add(Mesh::from(shape::Quad::new(Vec2::new(width, height))))
+    //         .into(),
+    //     transform: Transform::from_xyz(0.0, height - 125.0, 0.0),
+    //     material: materials.add(ColorMaterial::from(Color::PURPLE)),
+    //     ..default()
+    // });
 
-    commands.spawn(MaterialMesh2dBundle {
-        mesh: meshes
-            .add(Mesh::from(shape::Quad::new(Vec2::new(width, height))))
-            .into(),
-        transform: Transform::from_xyz(0.0, height - 125.0, 0.0),
-        material: materials.add(ColorMaterial::from(Color::PURPLE)),
-        ..default()
-    });
+    let p1_position = Vec2::new(-5.0, 0.0);
 
     commands.spawn((
         SpriteBundle {
+            sprite: Sprite {
+                color: Color::rgb(0., 0.47, 1.),
+                custom_size: Some(Vec2::new(1., 1.)),
+                ..Default::default()
+            },
             texture: asset_server.load("bevy_pixel_dark.png"),
-            transform: Transform::from_xyz(-width / 4.0, height, 0.0),
-            ..default()
+            transform: Transform::from_xyz(p1_position.x, p1_position.y, 0.0),
+            ..Default::default()
         },
         Player {
-            position: Vec2::new(-width / 4.0, height),
-
+            position: p1_position,
             facing_right: true,
         },
         Target {
-            position: Vec2::new(-width / 4.0, height),
+            position: p1_position,
         },
     ));
 }
@@ -90,6 +89,7 @@ pub fn movement(
     mut target_query: Query<&mut Target>,
     touches: Res<Touches>,
     mouse: Res<Input<MouseButton>>,
+    camera_query: Query<(&Camera, &GlobalTransform)>,
 ) {
     for mut target in target_query.iter_mut() {
         for window in windows.iter_mut() {
@@ -98,7 +98,9 @@ pub fn movement(
                     || mouse.pressed(MouseButton::Right)
                     || touches.any_just_pressed()
                 {
-                    let world_position = window_to_world_coordinates(&window, cursor);
+                    let (camera, camera_transform) = camera_query.single();
+                    let world_position =
+                        window_to_world_coordinates(&window, camera, camera_transform, cursor);
                     target.position.x = world_position.x; // Only update the x position
                 }
             }
@@ -106,11 +108,21 @@ pub fn movement(
     }
 }
 
-fn window_to_world_coordinates(window: &Window, cursor_position: Vec2) -> Vec2 {
-    Vec2::new(
-        cursor_position.x - window.width() * 0.5,
-        cursor_position.y - window.height() * 0.5,
-    )
+fn window_to_world_coordinates(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    cursor_position: Vec2,
+) -> Vec2 {
+    let screen_size = Vec2::new(window.width(), window.height());
+    let screen_position = cursor_position / screen_size;
+    let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
+    let mut world_position = camera
+        .projection_matrix()
+        .inverse()
+        .project_point3(clip_position.extend(0.0));
+    world_position = *camera_transform * world_position;
+    world_position.truncate()
 }
 
 pub fn move_to_click(
@@ -129,7 +141,7 @@ pub fn move_to_click(
         let distance_to_target = direction.length();
 
         if distance_to_target > 0.0 {
-            let player_speed = 200.0;
+            let player_speed = 10.0;
             let normalized_direction = direction / distance_to_target;
             let movement = normalized_direction * player_speed * time.delta_seconds();
 
@@ -150,6 +162,7 @@ pub fn move_to_click(
         }
 
         transform.translation = Vec3::new(player.position.x, player.position.y, 0.0);
+        println!("Player position: {:?}", player.position);
     }
 }
 
