@@ -32,24 +32,10 @@ enum AppState {
     InGame,
 }
 
-fn setup(
-    mut commands: Commands,
-    // mut meshes: ResMut<Assets<Mesh>>,
-    // mut materials: ResMut<Assets<ColorMaterial>>,
-    asset_server: Res<AssetServer>,
-) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
     commands.spawn(camera_bundle);
-
-    // commands.spawn(MaterialMesh2dBundle {
-    //     mesh: meshes
-    //         .add(Mesh::from(shape::Quad::new(Vec2::new(width, height))))
-    //         .into(),
-    //     transform: Transform::from_xyz(0.0, height - 125.0, 0.0),
-    //     material: materials.add(ColorMaterial::from(Color::PURPLE)),
-    //     ..default()
-    // });
 
     let p1_position = Vec2::new(-5.0, 0.0);
 
