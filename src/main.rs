@@ -1,6 +1,8 @@
 use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
+use log::Level;
 
 fn main() {
+    wasm_logger::init(wasm_logger::Config::new(Level::Info));
     let mut app = App::new();
 
     app.add_state::<AppState>();
@@ -11,7 +13,7 @@ fn main() {
         primary_window: Some(Window {
             title: "SwordGame".to_string(),
             fit_canvas_to_parent: true,
-            prevent_default_event_handling: false,
+            prevent_default_event_handling: true,
             ..Default::default()
         }),
         ..Default::default()
@@ -91,17 +93,25 @@ pub fn movement(
     mouse: Res<Input<MouseButton>>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
 ) {
+    let (camera, camera_transform) = camera_query.single();
+
+    for touch in touches.iter_just_pressed() {
+        let touch_pos = touch.position();
+        for mut target in target_query.iter_mut() {
+            for window in windows.iter_mut() {
+                let world_position =
+                    window_to_world_coordinates_touch(&window, camera, camera_transform, touch_pos);
+                target.position = world_position;
+            }
+        }
+    }
+
     for mut target in target_query.iter_mut() {
         for window in windows.iter_mut() {
             if let Some(cursor) = window.cursor_position() {
-                if mouse.pressed(MouseButton::Left)
-                    || mouse.pressed(MouseButton::Right)
-                    || touches.just_pressed(0)
-                {
-                    let (camera, camera_transform) = camera_query.single();
+                if mouse.just_pressed(MouseButton::Left) || mouse.just_pressed(MouseButton::Right) {
                     let world_position =
                         window_to_world_coordinates(&window, camera, camera_transform, cursor);
-                    //target.position.x = world_position.x; // Only update the x position
                     target.position = world_position;
                 }
             }
@@ -117,6 +127,26 @@ fn window_to_world_coordinates(
 ) -> Vec2 {
     let screen_size = Vec2::new(window.width(), window.height());
     let screen_position = cursor_position / screen_size;
+    let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
+    let mut world_position = camera
+        .projection_matrix()
+        .inverse()
+        .project_point3(clip_position.extend(0.0));
+    world_position = *camera_transform * world_position;
+    world_position.truncate()
+}
+
+fn window_to_world_coordinates_touch(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    cursor_position: Vec2,
+) -> Vec2 {
+    let screen_size = Vec2::new(window.width(), window.height());
+    let screen_position = Vec2::new(
+        cursor_position.x / screen_size.x,
+        1.0 - (cursor_position.y / screen_size.y),
+    );
     let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
     let mut world_position = camera
         .projection_matrix()
