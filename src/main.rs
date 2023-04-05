@@ -1,5 +1,4 @@
-use bevy::reflect::TypeUuid;
-use bevy::{prelude::*, render::camera::ScalingMode, tasks::IoTaskPool, window::Window};
+use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 use bevy_ggrs::*;
 use bevy_matchbox::prelude::*;
 
@@ -7,72 +6,112 @@ const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
 
 fn main() {
-    let mut app = App::new();
+    // let mut app = App::new();
 
-    app.add_state::<AppState>();
+    // app.add_state::<AppState>();
+
+    // GGRSPlugin::<GgrsConfig>::new()
+    //     .with_input_system(input)
+    //     .register_rollback_component::<Transform>()
+    //     .build(&mut app);
+
+    // app.insert_resource(ClearColor(Color::rgb_u8(0, 0, 0)));
+
+    // app.add_plugins(DefaultPlugins.set(WindowPlugin {
+    //     primary_window: Some(Window {
+    //         title: "SwordGame".to_string(),
+    //         fit_canvas_to_parent: true,
+    //         prevent_default_event_handling: false,
+    //         ..Default::default()
+    //     }),
+    //     ..Default::default()
+    // }));
+
+    // app.add_startup_systems((setup, start_matchbox_socket));
+
+    // app.add_systems((
+    //     move_to_click.in_schedule(GGRSSchedule),
+    //     update_facing,
+    //     wait_for_players,
+    // ));
+    // app.run();
+
+    let mut app = App::new();
 
     GGRSPlugin::<GgrsConfig>::new()
         .with_input_system(input)
         .register_rollback_component::<Transform>()
+        .register_rollback_component::<Target>()
         .build(&mut app);
 
-    app.insert_resource(ClearColor(Color::rgb_u8(0, 0, 0)));
-
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "SwordGame".to_string(),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: false,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
-
-    app.add_startup_systems((setup, start_matchbox_socket));
-
-    app.add_systems((
-        move_to_click.in_schedule(GGRSSchedule),
-        update_facing,
-        wait_for_players,
-        movement,
-    ));
-    app.run();
+    app.insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "SwordGame".to_string(),
+                // fill the entire browser window
+                fit_canvas_to_parent: true,
+                prevent_default_event_handling: false,
+                ..default()
+            }),
+            ..default()
+        }))
+        .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
+        .add_startup_systems((setup, spawn_players, start_matchbox_socket))
+        .add_systems((
+            move_to_click.in_schedule(GGRSSchedule),
+            wait_for_players,
+            update_facing,
+        ))
+        .run();
 }
 
-#[derive(States, PartialEq, Eq, Debug, Clone, Hash, Default)]
-enum AppState {
-    #[default]
-    InGame,
-}
+// #[derive(States, PartialEq, Eq, Debug, Clone, Hash, Default)]
+// enum AppState {
+//     #[default]
+//     InGame,
+// }
 
-#[derive(Component, Debug, Default, Clone, Reflect, TypeUuid)]
-#[uuid = "a8ab5281-68a6-41f8-b165-72bf8075d4fe"]
+#[derive(Component)]
 pub struct Player {
-    pub position: Vec2,
     pub facing_right: bool,
     handle: usize,
     moving: bool,
-    pub target_position: Vec2,
 }
 
-// #[derive(Component, Debug, Default, Clone, Reflect, TypeUuid)]
-// #[uuid = "a19dd532-79dd-42e7-90ce-645d635412f6"]
-// pub struct Target {
-//     position: Vec2,
-// }
+#[derive(Component, Reflect, Default)]
+pub struct Target(pub Vec2);
 
-fn setup(
+struct GgrsConfig;
+
+impl ggrs::Config for GgrsConfig {
+    // 4-directions + fire fits easily in a single byte
+    type Input = u8;
+    type State = u8;
+    // Matchbox' WebRtcSocket addresses are called `PeerId`s
+    type Address = PeerId;
+}
+
+fn setup(mut commands: Commands) {
+    let mut camera_bundle = Camera2dBundle::default();
+    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
+    commands.spawn(camera_bundle);
+}
+
+fn spawn_players(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut rip: ResMut<RollbackIdProvider>,
 ) {
-    let mut camera_bundle = Camera2dBundle::default();
-    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
-    commands.spawn(camera_bundle);
-
     //player 1
     let p1_position = Vec2::new(-5.0, 0.0);
     commands.spawn((
+        Player {
+            facing_right: true,
+            handle: 0,
+            moving: false,
+        },
+        Target(p1_position),
+        rip.next(),
         SpriteBundle {
             sprite: Sprite {
                 color: Color::rgb(0., 0.47, 1.),
@@ -83,18 +122,17 @@ fn setup(
             transform: Transform::from_xyz(p1_position.x, p1_position.y, 0.0),
             ..Default::default()
         },
-        Player {
-            position: p1_position,
-            facing_right: true,
-            handle: 0,
-            moving: false,
-            target_position: p1_position,
-        },
-        rip.next(),
     ));
     //player 2
     let p2_position = Vec2::new(5.0, 0.0);
     commands.spawn((
+        Player {
+            facing_right: false,
+            handle: 1,
+            moving: false,
+        },
+        Target(p2_position),
+        rip.next(),
         SpriteBundle {
             sprite: Sprite {
                 color: Color::rgb(0., 0.4, 0.),
@@ -105,49 +143,49 @@ fn setup(
             transform: Transform::from_xyz(p2_position.x, p2_position.y, 0.0),
             ..Default::default()
         },
-        Player {
-            position: p2_position,
-            facing_right: false,
-            handle: 1,
-            moving: false,
-            target_position: p2_position,
-        },
-        rip.next(),
     ));
 }
 
-pub fn movement(
-    mut windows: Query<&mut Window>,
-    mut player_query: Query<(&mut Player, &mut Transform)>,
-    touches: Res<Touches>,
-    mouse: Res<Input<MouseButton>>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-) {
-    let (camera, camera_transform) = camera_query.single();
+// pub fn movement(
+//     mut windows: Query<&mut Window>,
+//     mut player_query: Query<(&mut Player, &mut Transform)>,
+//     touches: Res<Touches>,
+//     mouse: Res<Input<MouseButton>>,
+//     camera_query: Query<(&Camera, &GlobalTransform)>,
+// ) {
+//     let (camera, camera_transform) = camera_query.single();
 
-    for touch in touches.iter_just_pressed() {
-        let touch_pos = touch.position();
-        for (mut player, _) in player_query.iter_mut() {
-            for window in windows.iter_mut() {
-                let world_position =
-                    window_to_world_coordinates_touch(&window, camera, camera_transform, touch_pos);
-                player.target_position = world_position;
-            }
-        }
-    }
+//     for touch in touches.iter_just_pressed() {
+//         let touch_pos = touch.position();
+//         for (mut player, _) in player_query.iter_mut() {
+//             info!(
+//                 "player pos {:?}, player: {:?}",
+//                 player.position, player.handle
+//             );
+//             for window in windows.iter_mut() {
+//                 let world_position =
+//                     window_to_world_coordinates_touch(&window, camera, camera_transform, touch_pos);
+//                 player.target_position = world_position;
+//             }
+//         }
+//     }
 
-    for (mut player, _) in player_query.iter_mut() {
-        for window in windows.iter_mut() {
-            if let Some(cursor) = window.cursor_position() {
-                if mouse.just_pressed(MouseButton::Left) || mouse.just_pressed(MouseButton::Right) {
-                    let world_position =
-                        window_to_world_coordinates(&window, camera, camera_transform, cursor);
-                    player.target_position = world_position;
-                }
-            }
-        }
-    }
-}
+//     for (mut player, _) in player_query.iter_mut() {
+//         info!(
+//             "player pos {:?}, player: {:?}",
+//             player.position, player.handle
+//         );
+//         for window in windows.iter_mut() {
+//             if let Some(cursor) = window.cursor_position() {
+//                 if mouse.just_pressed(MouseButton::Left) || mouse.just_pressed(MouseButton::Right) {
+//                     let world_position =
+//                         window_to_world_coordinates(&window, camera, camera_transform, cursor);
+//                     player.target_position = world_position;
+//                 }
+//             }
+//         }
+//     }
+// }
 
 fn window_to_world_coordinates(
     window: &Window,
@@ -187,49 +225,125 @@ fn window_to_world_coordinates_touch(
 }
 
 fn move_to_click(
-    mut player_query: Query<(&mut Transform, &mut Player)>,
+    mut player_query: Query<(&mut Transform, &mut Target, &mut Player)>,
     time: Res<Time>,
     inputs: Res<PlayerInputs<GgrsConfig>>,
-    //keyboard: Res<Input<KeyCode>>,
+    mut windows: Query<&mut Window>,
+    touches: Res<Touches>,
+    mouse: Res<Input<MouseButton>>,
+    camera_query: Query<(&Camera, &GlobalTransform)>,
 ) {
-    for (mut transform, mut player) in player_query.iter_mut() {
+    for (mut transform, mut target, mut player) in player_query.iter_mut() {
         let (input, _) = inputs[player.handle];
-        info!("eeeeeeee {:?}", input);
+        let (camera, camera_transform) = camera_query.single();
+
+        let mut direction = Vec2::ZERO;
 
         if input & INPUT_MOVE != 0 {
-            player.moving = true;
-        }
-        if player.moving {
-            let current_position = player.position;
-            let direction = player.target_position - current_position;
-            let distance_to_target = direction.length();
+            for window in windows.iter_mut() {
+                if let Some(cursor) = window.cursor_position() {
+                    let world_position =
+                        window_to_world_coordinates(&window, camera, camera_transform, cursor);
+                    target.0 = world_position;
 
-            if distance_to_target > 0.0 {
-                let player_speed = 10.0;
-                let normalized_direction = direction / distance_to_target;
-                let movement = normalized_direction * player_speed * time.delta_seconds();
-
-                if movement.length() < distance_to_target {
-                    player.position += movement;
-                } else {
-                    player.position = player.target_position
+                    player.moving = true;
                 }
-                let horizontal_movement = movement.x.abs() > f32::EPSILON;
-                let normalized_direction = direction / distance_to_target;
-                if horizontal_movement {
-                    if normalized_direction.x > 0.0 {
-                        player.facing_right = true;
-                    } else {
-                        player.facing_right = false;
-                    }
-                }
-            } else {
-                player.moving = false;
             }
-            transform.translation = Vec3::new(player.position.x, player.position.y, 0.0);
-            println!("Player position: {:?}", player.position);
+
+            // let current_position = transform.translation;
+            // direction = player.target_position - Vec2::new(current_position.x, current_position.y);
+            // let distance_to_target = direction.length();
+            // if distance_to_target > 0.0 {
+            //     let player_speed = 10.0;
+            //     let normalized_direction = direction / distance_to_target;
+            //     let movement = normalized_direction * player_speed * time.delta_seconds();
+
+            //     if movement.length() < distance_to_target {
+            //         //transform.translation += Vec3::new(movement.x, movement.y, 0.0);
+            //         direction.y += 1.;
+            //         // Update player position
+            //     } else {
+            //         // transform.translation =
+            //         Vec3::new(player.target_position.x, player.target_position.y, 0.0);
+            //         // Update player position
+            //         direction.y += 1.;
+            //         player.moving = false;
+            //         info!(
+            //             "input {:?}, player pos {:?}, player: {:?}",
+            //             input, transform.translation, player.handle
+            //         );
+            //     }
+            // }
+            // let egg = target.0 - Vec2::new(transform.translation.x, transform.translation.y);
+            // direction.y += egg.y;
+            // direction.y += 1.;
+
+            direction = target.0 - Vec2::new(transform.translation.x, transform.translation.y);
         }
+
+        if direction == Vec2::ZERO {
+            continue;
+        }
+
+        let move_speed = 0.13;
+        let move_delta = (direction * move_speed).extend(0.);
+
+        transform.translation += move_delta;
     }
+
+    // let (camera, camera_transform) = camera_query.single();
+
+    // for (mut transform, mut player) in player_query.iter_mut() {
+    //     let (input, _) = inputs[player.handle];
+
+    //     if input & INPUT_MOVE != 0 {
+    //         for window in windows.iter_mut() {
+    //             if let Some(cursor) = window.cursor_position() {
+    //                 let world_position =
+    //                     window_to_world_coordinates(&window, camera, camera_transform, cursor);
+    //                 player.target_position = world_position;
+    //                 player.moving = true;
+    //             }
+    //         }
+    //     }
+
+    //     if player.moving {
+    //         let current_position = transform.translation;
+    //         let direction =
+    //             player.target_position - Vec2::new(current_position.x, current_position.y);
+    //         let distance_to_target = direction.length();
+
+    //         if distance_to_target > 0.0 {
+    //             let player_speed = 10.0;
+    //             let normalized_direction = direction / distance_to_target;
+    //             let movement = normalized_direction * player_speed * time.delta_seconds();
+
+    //             if movement.length() < distance_to_target {
+    //                 transform.translation += Vec3::new(movement.x, movement.y, 0.0);
+    //                 // Update player position
+    //             } else {
+    //                 transform.translation =
+    //                     Vec3::new(player.target_position.x, player.target_position.y, 0.0);
+    //                 // Update player position
+    //                 player.moving = false;
+    //                 info!(
+    //                     "input {:?}, player pos {:?}, player: {:?}",
+    //                     input, transform.translation, player.handle
+    //                 );
+    //             }
+    //             let horizontal_movement = movement.x.abs() > f32::EPSILON;
+    //             let normalized_direction = direction / distance_to_target;
+    //             if horizontal_movement {
+    //                 if normalized_direction.x > 0.0 {
+    //                     player.facing_right = true;
+    //                 } else {
+    //                     player.facing_right = false;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     info!("player: {:?}, {:?}", player.handle, transform.translation);
+    // }
 }
 
 pub fn update_facing(mut player_query: Query<(&Player, &mut Transform)>) {
@@ -286,16 +400,6 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
     commands.insert_resource(bevy_ggrs::Session::P2PSession(ggrs_session));
 }
 
-struct GgrsConfig;
-
-impl ggrs::Config for GgrsConfig {
-    // 4-directions + fire fits easily in a single byte
-    type Input = u8;
-    type State = u8;
-    // Matchbox' WebRtcSocket addresses are called `PeerId`s
-    type Address = PeerId;
-}
-
 fn input(
     _: In<ggrs::PlayerHandle>,
     keys: Res<Input<KeyCode>>,
@@ -308,9 +412,9 @@ fn input(
         input |= INPUT_MOVE;
     }
 
-    if touches.iter_just_pressed().count() > 0 {
-        input |= INPUT_MOVE;
-    }
+    // if touches.iter_just_pressed().count() > 0 {
+    //     input |= INPUT_MOVE;
+    // }
     // if touches.iter_just_pressed() {
     //     input |= INPUT_MOVE;
     // }
