@@ -3,11 +3,13 @@ use bevy_ggrs::*;
 use bevy_matchbox::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::prelude::*;
 
 const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
 
-fn main() {
+#[wasm_bindgen]
+pub fn game() {
     let mut app = App::new();
 
     GGRSPlugin::<GgrsConfig>::new()
