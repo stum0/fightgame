@@ -29,13 +29,19 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_startup_systems((setup, spawn_players, start_matchbox_socket))
-        .add_systems((move_system.in_schedule(GGRSSchedule), wait_for_players))
+        .add_systems((
+            move_system.in_schedule(GGRSSchedule),
+            wait_for_players,
+            update_facing,
+        ))
         .run();
 }
 
 #[derive(Component)]
 pub struct Player {
+    pub facing_right: bool,
     handle: usize,
+    moving: bool,
 }
 
 #[derive(Default, Reflect, Component)]
@@ -43,6 +49,9 @@ pub struct Target {
     pub x: f32,
     pub y: f32,
 }
+
+#[derive(Component)]
+pub struct MovingToTarget;
 
 struct GgrsConfig;
 
@@ -78,7 +87,11 @@ fn spawn_players(
     //player 1
     let p1_position = Vec2::new(-5.0, 0.0);
     commands.spawn((
-        Player { handle: 0 },
+        Player {
+            facing_right: true,
+            handle: 0,
+            moving: false,
+        },
         Target::default(),
         rip.next(),
         SpriteBundle {
@@ -95,7 +108,11 @@ fn spawn_players(
     //player 2
     let p2_position = Vec2::new(5.0, 0.0);
     commands.spawn((
-        Player { handle: 1 },
+        Player {
+            facing_right: false,
+            handle: 1,
+            moving: false,
+        },
         Target::default(),
         rip.next(),
         SpriteBundle {
@@ -111,7 +128,7 @@ fn spawn_players(
     ));
 }
 
-fn window_to_world_coordinates(
+fn get_click_position(
     window: &Window,
     camera: &Camera,
     camera_transform: &GlobalTransform,
@@ -120,29 +137,47 @@ fn window_to_world_coordinates(
     let screen_size = Vec2::new(window.width(), window.height());
     let screen_position = cursor_position / screen_size;
     let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
-    let mut world_position = camera
+    let mut click_position = camera
         .projection_matrix()
         .inverse()
         .project_point3(clip_position.extend(0.0));
-    world_position = *camera_transform * world_position;
-    world_position.truncate()
+    click_position = *camera_transform * click_position;
+    click_position.truncate()
+}
+
+fn get_touch_position(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    cursor_position: Vec2,
+) -> Vec2 {
+    let screen_size = Vec2::new(window.width(), window.height());
+    let screen_position = Vec2::new(
+        cursor_position.x / screen_size.x,
+        1.0 - (cursor_position.y / screen_size.y),
+    );
+    let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
+    let mut touch_position = camera
+        .projection_matrix()
+        .inverse()
+        .project_point3(clip_position.extend(0.0));
+    touch_position = *camera_transform * touch_position;
+    touch_position.truncate()
 }
 
 fn move_system(
-    mut query: Query<(&mut Transform, &mut Target, &Player), With<Rollback>>,
+    mut query: Query<(&mut Transform, &mut Target, &mut Player), With<Rollback>>,
     inputs: Res<PlayerInputs<GgrsConfig>>,
 ) {
-    for (mut t, mut tg, p) in query.iter_mut() {
+    for (mut t, mut tg, mut p) in query.iter_mut() {
         let input = inputs[p.handle].0.inp;
-        //let (camera, camera_transform) = camera_query.single();
-        // set velocity through key presses
 
         if input & INPUT_MOVE != 0 {
-            let world_position =
+            let click_position =
                 Vec2::new(inputs[p.handle].0.target_x, inputs[p.handle].0.target_y);
 
-            tg.x = world_position.x;
-            tg.y = world_position.y;
+            tg.x = click_position.x;
+            tg.y = click_position.y;
 
             let target = Vec2::new(tg.x, tg.y);
             let translation_2d = Vec2::new(t.translation.x, t.translation.y);
@@ -153,11 +188,15 @@ fn move_system(
                 let d = direction / distance;
                 tg.x = d.x;
                 tg.y = d.y;
+                if d.x > 0.0 {
+                    p.facing_right = true;
+                } else {
+                    p.facing_right = false;
+                }
             }
+
             let move_rate = 0.1;
             t.translation += Vec3::new(tg.x, tg.y, 0.0) * move_rate;
-            println!("player: {:?}, Y: {}", p.handle, tg.y);
-            println!("player: {:?}, X: {}", p.handle, tg.x);
         }
     }
 }
@@ -212,31 +251,47 @@ pub fn input(
     mouse: Res<Input<MouseButton>>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     mut windows: Query<&mut Window>,
+    touches: Res<Touches>,
 ) -> CustomInput {
     let mut input = CustomInput {
         inp: 0,
         target_x: 0.0,
         target_y: 0.0,
     };
-    // ... (the rest of your input gathering logic)
 
-    // Set target position
-    for window in windows.iter_mut() {
-        if let Some(cursor) = window.cursor_position() {
-            let (camera, camera_transform) = camera_query.single();
-            let world_position =
-                window_to_world_coordinates(&window, camera, camera_transform, cursor);
-            input.target_x = world_position.x;
-            input.target_y = world_position.y;
+    for touch in touches.iter() {
+        let touch_pos = touch.position();
+        let (camera, camera_transform) = camera_query.single();
+
+        for window in windows.iter_mut() {
+            let touch_position = get_touch_position(&window, camera, camera_transform, touch_pos);
+            input.target_x = touch_position.x;
+            input.target_y = touch_position.y;
         }
+        input.inp |= INPUT_MOVE;
     }
 
     if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
+        for window in windows.iter_mut() {
+            if let Some(cursor) = window.cursor_position() {
+                let (camera, camera_transform) = camera_query.single();
+                let click_position = get_click_position(&window, camera, camera_transform, cursor);
+                input.target_x = click_position.x;
+                input.target_y = click_position.y;
+            }
+        }
         input.inp |= INPUT_MOVE;
-        println!("click: {:?}", input);
     }
 
     input
+}
 
-    // ... (the rest of your input handling logic)
+pub fn update_facing(mut player_query: Query<(&Player, &mut Transform)>) {
+    for (player, mut transform) in player_query.iter_mut() {
+        if player.facing_right {
+            transform.rotation = Quat::from_rotation_y(0.0); // Face right
+        } else {
+            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI); // Face left
+        }
+    }
 }
