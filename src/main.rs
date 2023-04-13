@@ -50,9 +50,6 @@ pub struct Target {
     pub y: f32,
 }
 
-#[derive(Component)]
-pub struct MovingToTarget;
-
 struct GgrsConfig;
 
 impl ggrs::Config for GgrsConfig {
@@ -168,6 +165,7 @@ fn get_touch_position(
 fn move_system(
     mut query: Query<(&mut Transform, &mut Target, &mut Player), With<Rollback>>,
     inputs: Res<PlayerInputs<GgrsConfig>>,
+    time: Res<Time>,
 ) {
     for (mut t, mut tg, mut p) in query.iter_mut() {
         let input = inputs[p.handle].0.inp;
@@ -178,25 +176,33 @@ fn move_system(
 
             tg.x = click_position.x;
             tg.y = click_position.y;
+            p.moving = true;
+        }
 
-            let target = Vec2::new(tg.x, tg.y);
-            let translation_2d = Vec2::new(t.translation.x, t.translation.y);
-            let direction = target - translation_2d;
-            let distance = direction.length();
+        if p.moving {
+            let current_position = Vec2::new(t.translation.x, t.translation.y);
+            let direction = Vec2::new(tg.x, tg.y) - current_position;
+            let distance_to_target = direction.length();
 
-            if distance > f32::EPSILON {
-                let d = direction / distance;
-                tg.x = d.x;
-                tg.y = d.y;
-                if d.x > 0.0 {
+            if distance_to_target > 0.0 {
+                let player_speed = 10.0;
+                let normalized_direction = direction / distance_to_target;
+                let movement = normalized_direction * player_speed * time.delta_seconds();
+
+                if movement.length() < distance_to_target {
+                    t.translation += Vec3::new(movement.x, movement.y, 0.0);
+                } else {
+                    t.translation = Vec3::new(tg.x, tg.y, 0.0);
+                    p.moving = false;
+                }
+                if normalized_direction.x > 0.0 {
                     p.facing_right = true;
                 } else {
                     p.facing_right = false;
                 }
+            } else {
+                p.moving = false;
             }
-
-            let move_rate = 0.1;
-            t.translation += Vec3::new(tg.x, tg.y, 0.0) * move_rate;
         }
     }
 }
