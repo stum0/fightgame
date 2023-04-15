@@ -4,13 +4,11 @@ use bevy_asset_loader::prelude::*;
 use bevy_ggrs::*;
 use bevy_matchbox::prelude::*;
 use bytemuck::{Pod, Zeroable};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
 
-// #[wasm_bindgen]
 pub fn main() {
     let mut app = App::new();
 

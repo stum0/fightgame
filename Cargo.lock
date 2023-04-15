@@ -2231,6 +2231,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e825f6987101665dea6ec934c09ec6d721de7bc1bf92248e1d5810c8cd636b77"
 
 [[package]]
+name = "fightgame"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_asset_loader",
+ "bevy_ggrs",
+ "bevy_matchbox",
+ "bytemuck",
+ "serde",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4476,20 +4488,6 @@ name = "svg_fmt"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fb1df15f412ee2e9dfc1c504260fa695c1c3f10fe9f4a6ee2d2184d7d6450e2"
-
-[[package]]
-name = "swordgame"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_asset_loader",
- "bevy_ggrs",
- "bevy_matchbox",
- "bytemuck",
- "matchbox_socket",
- "rand",
- "serde",
-]
 
 [[package]]
 name = "syn"
