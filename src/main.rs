@@ -4,8 +4,8 @@ use bevy_asset_loader::prelude::*;
 use bevy_ggrs::*;
 use bevy_matchbox::prelude::*;
 use bytemuck::{Pod, Zeroable};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
 
 const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
@@ -43,6 +43,7 @@ pub fn main() {
             wait_for_players.run_if(in_state(GameState::Matchmaking)),
             spawn_players.in_schedule(OnEnter(GameState::InGame)),
         ))
+        .add_system(log_ggrs_events.in_set(OnUpdate(GameState::InGame)))
         .add_systems(
             (
                 move_system,
@@ -50,6 +51,7 @@ pub fn main() {
                 fire_bullets.after(move_system).after(reload_bullet),
                 move_bullet.after(fire_bullets),
                 kill_players.after(move_bullet).after(move_system),
+                respawn_players.after(kill_players),
             )
                 .in_schedule(GGRSSchedule),
         )
@@ -66,7 +68,10 @@ enum GameState {
 }
 
 #[derive(Component, Reflect, Default)]
-pub struct BulletReady(pub bool);
+pub struct BulletReady {
+    pub ready: bool,
+    pub timer: Timer,
+}
 
 #[derive(Component, Reflect, Default, Clone, Copy)]
 pub struct MoveDir(pub Vec2);
@@ -95,6 +100,7 @@ struct ImageAssets {
     player: Handle<Image>,
 }
 
+#[derive(Debug)]
 struct GgrsConfig;
 
 impl ggrs::Config for GgrsConfig {
@@ -104,6 +110,9 @@ impl ggrs::Config for GgrsConfig {
     // Matchbox' WebRtcSocket addresses are called `PeerId`s
     type Address = PeerId;
 }
+
+#[derive(Component)]
+pub struct Despawned;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CustomInput {
@@ -123,8 +132,6 @@ fn setup(mut commands: Commands) {
 
 fn spawn_players(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    player_query: Query<Entity, With<Player>>,
     mut rip: ResMut<RollbackIdProvider>,
     images: Res<ImageAssets>,
 ) {
@@ -137,7 +144,10 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(Vec2::X),
-        BulletReady(true),
+        BulletReady {
+            ready: true,
+            timer: Timer::from_seconds(2.0, TimerMode::Once),
+        },
         Target::default(),
         rip.next(),
         SpriteBundle {
@@ -160,12 +170,15 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(-Vec2::X),
-        BulletReady(true),
+        BulletReady {
+            ready: true,
+            timer: Timer::from_seconds(2.0, TimerMode::Once),
+        },
         Target::default(),
         rip.next(),
         SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(0., 0.4, 0.),
+                color: Color::rgb(1., 0.47, 0.),
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
@@ -372,28 +385,34 @@ fn fire_bullets(
     images: Res<ImageAssets>,
     mut player_query: Query<(&Transform, &Player, &mut BulletReady, &MoveDir)>,
     mut rip: ResMut<RollbackIdProvider>,
+    time: Res<Time>,
 ) {
     for (transform, player, mut bullet_ready, move_dir) in player_query.iter_mut() {
         let (input, _) = inputs[player.handle];
-        if fire(input) && bullet_ready.0 {
-            let player_pos = transform.translation.xy();
-            let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
-            commands.spawn((
-                Bullet,
-                rip.next(),
-                *move_dir,
-                SpriteBundle {
-                    transform: Transform::from_translation(pos.extend(200.))
-                        .with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
-                    texture: images.bullet.clone(),
-                    sprite: Sprite {
-                        custom_size: Some(Vec2::new(0.3, 0.1)),
+        if fire(input) && bullet_ready.ready {
+            bullet_ready.timer.tick(time.delta());
+            if bullet_ready.timer.finished() {
+                let player_pos = transform.translation.xy();
+                let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
+                commands.spawn((
+                    Bullet,
+                    rip.next(),
+                    *move_dir,
+                    SpriteBundle {
+                        transform: Transform::from_translation(pos.extend(200.))
+                            .with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
+                        texture: images.bullet.clone(),
+                        sprite: Sprite {
+                            custom_size: Some(Vec2::new(0.3, 0.1)),
+                            ..default()
+                        },
                         ..default()
                     },
-                    ..default()
-                },
-            ));
-            bullet_ready.0 = false;
+                ));
+                bullet_ready.timer.reset();
+            }
+        } else {
+            bullet_ready.timer.tick(time.delta());
         }
     }
 }
@@ -409,7 +428,7 @@ fn reload_bullet(
     for (mut can_fire, player) in query.iter_mut() {
         let (input, _) = inputs[player.handle];
         if !fire(input) {
-            can_fire.0 = true;
+            can_fire.ready = true;
         }
     }
 }
@@ -433,8 +452,37 @@ fn kill_players(
                 bullet_transform.translation.xy(),
             );
             if distance < PLAYER_RADIUS + BULLET_RADIUS {
-                commands.entity(player).despawn_recursive();
+                commands.entity(player).insert(Despawned);
             }
         }
+    }
+}
+
+fn respawn_players(
+    mut commands: Commands,
+    player_query: Query<(Entity, &Player), (With<Despawned>, Without<Bullet>)>,
+) {
+    for (entity, player) in player_query.iter() {
+        let position = match player.handle {
+            0 => Vec2::new(-5.0, 0.0),
+            1 => Vec2::new(5.0, 0.0),
+            _ => unreachable!(),
+        };
+
+        commands.entity(entity).remove::<Despawned>();
+        commands
+            .entity(entity)
+            .insert(Transform::from_xyz(position.x, position.y, 0.0));
+    }
+}
+
+fn log_ggrs_events(mut session: ResMut<Session<GgrsConfig>>) {
+    match session.as_mut() {
+        Session::P2PSession(s) => {
+            for event in s.events() {
+                info!("GGRS Event: {:?}", event);
+            }
+        }
+        _ => panic!("This example focuses on p2p."),
     }
 }

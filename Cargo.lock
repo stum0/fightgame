@@ -4487,8 +4487,8 @@ dependencies = [
  "bevy_matchbox",
  "bytemuck",
  "matchbox_socket",
+ "rand",
  "serde",
- "wasm-bindgen",
 ]
 
 [[package]]
