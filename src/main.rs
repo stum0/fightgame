@@ -146,7 +146,7 @@ fn spawn_players(
         MoveDir(Vec2::X),
         BulletReady {
             ready: true,
-            timer: Timer::from_seconds(2.0, TimerMode::Once),
+            timer: Timer::from_seconds(1.0, TimerMode::Once),
         },
         Target::default(),
         rip.next(),
@@ -172,7 +172,7 @@ fn spawn_players(
         MoveDir(-Vec2::X),
         BulletReady {
             ready: true,
-            timer: Timer::from_seconds(2.0, TimerMode::Once),
+            timer: Timer::from_seconds(1.0, TimerMode::Once),
         },
         Target::default(),
         rip.next(),
@@ -336,7 +336,9 @@ pub fn input(
         target_y: 0.0,
     };
 
+    let mut touch_count = 0;
     for touch in touches.iter() {
+        touch_count += 1;
         let touch_pos = touch.position();
         let (camera, camera_transform) = camera_query.single();
 
@@ -346,6 +348,10 @@ pub fn input(
             input.target_y = touch_position.y;
         }
         input.inp |= INPUT_MOVE;
+    }
+
+    if touch_count >= 2 {
+        input.inp |= INPUT_FIRE;
     }
 
     if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
