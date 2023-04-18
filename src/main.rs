@@ -1,13 +1,15 @@
 use bevy::math::Vec3Swizzles;
 use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 use bevy_asset_loader::prelude::*;
+use bevy_ggrs::ggrs::{PlayerType, SessionBuilder};
 use bevy_ggrs::*;
-use bevy_matchbox::prelude::*;
+use bevy_matchbox_nostr::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 
 const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
+const FPS: usize = 60;
 
 pub fn main() {
     let mut app = App::new();
@@ -65,6 +67,9 @@ enum GameState {
     InGame,
 }
 
+#[derive(Resource)]
+struct LocalPlayerHandle(usize);
+
 #[derive(Component, Reflect, Default)]
 pub struct BulletReady {
     pub ready: bool,
@@ -94,7 +99,7 @@ pub struct Bullet;
 struct ImageAssets {
     #[asset(path = "bullet.png")]
     bullet: Handle<Image>,
-    #[asset(path = "bevy_pixel_dark.png")]
+    #[asset(path = "ostrich.png")]
     player: Handle<Image>,
 }
 
@@ -150,7 +155,7 @@ fn spawn_players(
         rip.next(),
         SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(0., 0.47, 1.),
+                //color: Color::rgb(0., 0.47, 1.),
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
@@ -176,7 +181,7 @@ fn spawn_players(
         rip.next(),
         SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(1., 0.47, 0.),
+                //color: Color::rgb(1., 0.47, 0.),
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
@@ -272,25 +277,35 @@ fn move_system(
 }
 
 fn start_matchbox_socket(mut commands: Commands) {
-    let room_url = "wss://match-0-4.helsing.studio/extreme_bevy?next=2";
+    let room_url = "wss://nos.lol";
     info!("connecting to matchbox server: {:?}", room_url);
     commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
 }
 
 fn wait_for_players(
-    mut commands: Commands,
+    mut game_state: ResMut<NextState<GameState>>,
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut commands: Commands,
 ) {
+    // regularly call update_peers to update the list of connected peers
+    for (peer, new_state) in socket.update_peers() {
+        // you can also handle the specific dis(connections) as they occur:
+        match new_state {
+            PeerState::Connected => info!("peer {peer:?} connected"),
+            PeerState::Disconnected => info!("peer {peer:?} disconnected"),
+        }
+    }
+
     if socket.get_channel(0).is_err() {
         return; // we've already started
     }
 
     // Check for new connections
-    socket.update_peers();
+
     let players = socket.players();
 
     let num_players = 2;
+
     if players.len() < num_players {
         return; // wait for more players
     }
@@ -303,6 +318,10 @@ fn wait_for_players(
         .with_input_delay(2);
 
     for (i, player) in players.into_iter().enumerate() {
+        if player == PlayerType::Local {
+            commands.insert_resource(LocalPlayerHandle(i));
+        }
+
         session_builder = session_builder
             .add_player(player, i)
             .expect("failed to add player");
@@ -317,7 +336,7 @@ fn wait_for_players(
         .expect("failed to start session");
 
     commands.insert_resource(bevy_ggrs::Session::P2PSession(ggrs_session));
-    next_state.set(GameState::InGame);
+    game_state.set(GameState::InGame);
 }
 
 pub fn input(
@@ -374,9 +393,10 @@ pub fn input(
 pub fn update_facing(mut player_query: Query<(&Player, &mut Transform)>) {
     for (player, mut transform) in player_query.iter_mut() {
         if player.facing_right {
-            transform.rotation = Quat::from_rotation_y(0.0); // Face right
+            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI); // Face right
         } else {
-            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI); // Face left
+            transform.rotation = Quat::from_rotation_y(0.0);
+            // Face left
         }
     }
 }
