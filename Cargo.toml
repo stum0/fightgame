@@ -13,6 +13,8 @@ bevy_matchbox_nostr = { path = "/Users/stu/rust/matchbox_nostr/bevy_matchbox_nos
 bytemuck = { version = "1.13.1", features=["derive"]}
 serde = "1.0.160"
 bevy_asset_loader = "0.16.0"
+log = "0.4"
+console_log = { version = "1"}
 
 
 [profile.release]

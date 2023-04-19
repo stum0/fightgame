@@ -1,10 +1,14 @@
 use bevy::math::Vec3Swizzles;
 use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 use bevy_asset_loader::prelude::*;
-use bevy_ggrs::ggrs::{PlayerType, SessionBuilder};
-use bevy_ggrs::*;
+use bevy_ggrs::ggrs::PlayerType;
+use bevy_ggrs::{
+    ggrs, GGRSPlugin, GGRSSchedule, PlayerInputs, Rollback, RollbackIdProvider, Session,
+};
+
 use bevy_matchbox_nostr::prelude::*;
 use bytemuck::{Pod, Zeroable};
+use log::Level;
 use serde::{Deserialize, Serialize};
 
 const INPUT_MOVE: u8 = 1 << 0;
@@ -12,6 +16,8 @@ const INPUT_FIRE: u8 = 1 << 1;
 const FPS: usize = 60;
 
 pub fn main() {
+    console_log::init_with_level(Level::Info).expect("error initializing log");
+
     let mut app = App::new();
 
     GGRSPlugin::<GgrsConfig>::new()
@@ -40,7 +46,10 @@ pub fn main() {
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_systems((setup, start_matchbox_socket).in_schedule(OnEnter(GameState::Matchmaking)))
         .add_systems((
-            wait_for_players.run_if(in_state(GameState::Matchmaking)),
+            wait_for_players.run_if(
+                resource_exists::<MatchboxSocket<SingleChannel>>()
+                    .and_then(in_state(GameState::Matchmaking)),
+            ),
             spawn_players.in_schedule(OnEnter(GameState::InGame)),
         ))
         .add_system(log_ggrs_events.in_set(OnUpdate(GameState::InGame)))
@@ -236,7 +245,7 @@ fn move_system(
 ) {
     for (mut t, mut tg, mut p, mut move_dir) in query.iter_mut() {
         let input = inputs[p.handle].0.inp;
-
+        info!("input: {}", p.handle);
         if input & INPUT_MOVE != 0 {
             let click_position =
                 Vec2::new(inputs[p.handle].0.target_x, inputs[p.handle].0.target_y);
@@ -277,35 +286,25 @@ fn move_system(
 }
 
 fn start_matchbox_socket(mut commands: Commands) {
-    let room_url = "wss://nos.lol";
+    let room_url = "ws://localhost:8080";
     info!("connecting to matchbox server: {:?}", room_url);
-    commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
+    commands.open_socket(WebRtcSocketBuilder::new(room_url).add_channel(ChannelConfig::ggrs()));
 }
 
 fn wait_for_players(
-    mut game_state: ResMut<NextState<GameState>>,
-    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut commands: Commands,
+    mut socket: ResMut<MatchboxSocket<SingleChannel>>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
-    // regularly call update_peers to update the list of connected peers
-    for (peer, new_state) in socket.update_peers() {
-        // you can also handle the specific dis(connections) as they occur:
-        match new_state {
-            PeerState::Connected => info!("peer {peer:?} connected"),
-            PeerState::Disconnected => info!("peer {peer:?} disconnected"),
-        }
-    }
-
     if socket.get_channel(0).is_err() {
         return; // we've already started
     }
 
     // Check for new connections
-
+    socket.update_peers();
     let players = socket.players();
 
     let num_players = 2;
-
     if players.len() < num_players {
         return; // wait for more players
     }
@@ -319,6 +318,7 @@ fn wait_for_players(
 
     for (i, player) in players.into_iter().enumerate() {
         if player == PlayerType::Local {
+            info!("adding local player: {:?}", i);
             commands.insert_resource(LocalPlayerHandle(i));
         }
 
@@ -326,7 +326,7 @@ fn wait_for_players(
             .add_player(player, i)
             .expect("failed to add player");
     }
-
+    info!("ggrs session started: {:?}", session_builder);
     // move the channel out of the socket (required because GGRS takes ownership of it)
     let socket = socket.take_channel(0).unwrap();
 
@@ -336,7 +336,7 @@ fn wait_for_players(
         .expect("failed to start session");
 
     commands.insert_resource(bevy_ggrs::Session::P2PSession(ggrs_session));
-    game_state.set(GameState::InGame);
+    next_state.set(GameState::InGame);
 }
 
 pub fn input(
