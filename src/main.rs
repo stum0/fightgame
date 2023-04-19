@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
-const FPS: usize = 60;
 
 pub fn main() {
     console_log::init_with_level(Level::Info).expect("error initializing log");
