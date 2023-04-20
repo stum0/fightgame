@@ -295,24 +295,29 @@ fn wait_for_players(
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
-    if socket.get_channel(0).is_err() {
-        return; // we've already started
+    // regularly call update_peers to update the list of connected peers
+    for (peer, new_state) in socket.update_peers() {
+        // you can also handle the specific dis(connections) as they occur:
+        match new_state {
+            PeerState::Connected => info!("peer {peer:?} connected"),
+            PeerState::Disconnected => info!("peer {peer:?} disconnected"),
+        }
     }
 
-    // Check for new connections
-    socket.update_peers();
-    let players = socket.players();
+    let connected_peers = socket.connected_peers().count();
+    let remaining = 2 - (connected_peers + 1);
 
-    let num_players = 2;
-    if players.len() < num_players {
-        return; // wait for more players
+    if remaining > 0 {
+        return;
     }
 
     info!("All peers have joined, going in-game");
 
+    let players = socket.players();
+
     // create a GGRS P2P session
     let mut session_builder = ggrs::SessionBuilder::<GgrsConfig>::new()
-        .with_num_players(num_players)
+        .with_num_players(2)
         .with_input_delay(2);
 
     for (i, player) in players.into_iter().enumerate() {
