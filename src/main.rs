@@ -312,7 +312,6 @@ fn wait_for_players(
     }
 
     info!("All peers have joined, going in-game");
-
     let players = socket.players();
 
     // create a GGRS P2P session
