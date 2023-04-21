@@ -5,7 +5,6 @@ use bevy_ggrs::ggrs::PlayerType;
 use bevy_ggrs::{
     ggrs, GGRSPlugin, GGRSSchedule, PlayerInputs, Rollback, RollbackIdProvider, Session,
 };
-
 use bevy_matchbox_nostr::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use log::Level;
@@ -244,7 +243,7 @@ fn move_system(
 ) {
     for (mut t, mut tg, mut p, mut move_dir) in query.iter_mut() {
         let input = inputs[p.handle].0.inp;
-        info!("input: {}", p.handle);
+
         if input & INPUT_MOVE != 0 {
             let click_position =
                 Vec2::new(inputs[p.handle].0.target_x, inputs[p.handle].0.target_y);
@@ -286,6 +285,7 @@ fn move_system(
 
 fn start_matchbox_socket(mut commands: Commands) {
     let room_url = "ws://localhost:8080";
+    // let room_url = "wss://relay.damus.io";
     info!("connecting to matchbox server: {:?}", room_url);
     commands.open_socket(WebRtcSocketBuilder::new(room_url).add_channel(ChannelConfig::ggrs()));
 }
