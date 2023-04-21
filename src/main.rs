@@ -14,7 +14,7 @@ const INPUT_MOVE: u8 = 1 << 0;
 const INPUT_FIRE: u8 = 1 << 1;
 
 pub fn main() {
-    console_log::init_with_level(Level::Info).expect("error initializing log");
+    console_log::init_with_level(Level::Warn).expect("error initializing log");
 
     let mut app = App::new();
 
@@ -284,8 +284,8 @@ fn move_system(
 }
 
 fn start_matchbox_socket(mut commands: Commands) {
-    let room_url = "ws://localhost:8080";
-    // let room_url = "wss://relay.damus.io";
+    //let room_url = "ws://localhost:8080";
+    let room_url = "wss://nostr.zebedee.cloud";
     info!("connecting to matchbox server: {:?}", room_url);
     commands.open_socket(WebRtcSocketBuilder::new(room_url).add_channel(ChannelConfig::ggrs()));
 }
