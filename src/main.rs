@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use bevy::math::Vec3Swizzles;
+use bevy::utils::Instant;
 use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 use bevy_asset_loader::prelude::*;
 use bevy_ggrs::ggrs::PlayerType;
@@ -104,7 +107,7 @@ pub struct Bullet;
 
 #[derive(AssetCollection, Resource)]
 struct ImageAssets {
-    #[asset(path = "bullet.png")]
+    #[asset(path = "eggbullet.png")]
     bullet: Handle<Image>,
     #[asset(path = "ostrich.png")]
     player: Handle<Image>,
@@ -357,10 +360,10 @@ pub fn input(
         target_x: 0.0,
         target_y: 0.0,
     };
+    let mut last_touch_timestamp: Option<Instant> = None;
+    let touch_threshold = Duration::from_millis(300);
 
-    let mut touch_count = 0;
     for touch in touches.iter() {
-        touch_count += 1;
         let touch_pos = touch.position();
         let (camera, camera_transform) = camera_query.single();
 
@@ -369,11 +372,23 @@ pub fn input(
             input.target_x = touch_position.x;
             input.target_y = touch_position.y;
         }
-        input.inp |= INPUT_MOVE;
-    }
 
-    if touch_count >= 2 {
-        input.inp |= INPUT_FIRE;
+        // Check if the current touch is within the threshold since the last touch
+        if let Some(last_timestamp) = last_touch_timestamp {
+            if Instant::now().duration_since(last_timestamp) < touch_threshold {
+                // If within the threshold, trigger the shoot action and don't move
+                input.inp |= INPUT_FIRE;
+                last_touch_timestamp = None;
+            } else {
+                // If not within the threshold, update the last touch timestamp and move
+                last_touch_timestamp = Some(Instant::now());
+                input.inp |= INPUT_MOVE;
+            }
+        } else {
+            // If there was no previous touch, update the last touch timestamp and move
+            last_touch_timestamp = Some(Instant::now());
+            input.inp |= INPUT_MOVE;
+        }
     }
 
     if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
@@ -432,7 +447,7 @@ fn fire_bullets(
                             .with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
                         texture: images.bullet.clone(),
                         sprite: Sprite {
-                            custom_size: Some(Vec2::new(0.3, 0.1)),
+                            custom_size: Some(Vec2::new(0.7, 0.7)),
                             ..default()
                         },
                         ..default()
@@ -464,7 +479,7 @@ fn reload_bullet(
 
 fn move_bullet(mut query: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
     for (mut transform, dir) in query.iter_mut() {
-        let delta = (dir.0 * 0.35).extend(0.);
+        let delta = (dir.0 * 0.07).extend(0.);
         transform.translation += delta;
     }
 }
@@ -472,16 +487,17 @@ fn move_bullet(mut query: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
 fn kill_players(
     mut commands: Commands,
     player_query: Query<(Entity, &Transform), (With<Player>, Without<Bullet>)>,
-    bullet_query: Query<&Transform, With<Bullet>>,
+    bullet_query: Query<(Entity, &Transform), With<Bullet>>,
 ) {
     for (player, player_transform) in player_query.iter() {
-        for bullet_transform in bullet_query.iter() {
+        for (bullet, bullet_transform) in bullet_query.iter() {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
                 bullet_transform.translation.xy(),
             );
             if distance < PLAYER_RADIUS + BULLET_RADIUS {
                 commands.entity(player).insert(Despawned);
+                commands.entity(bullet).despawn();
             }
         }
     }
