@@ -284,9 +284,11 @@ fn move_system(
 }
 
 fn start_matchbox_socket(mut commands: Commands) {
-    //let room_url = "ws://localhost:8080";
-    let room_url = "wss://nostr.zebedee.cloud";
-    info!("connecting to matchbox server: {:?}", room_url);
+    // let room_url = "ws://localhost:8080";
+    let room_url = "wss://nostr.lu.ke";
+
+    //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
+    info!("connecting to nostr relay: {:?}", room_url);
     commands.open_socket(WebRtcSocketBuilder::new(room_url).add_channel(ChannelConfig::ggrs()));
 }
 
