@@ -60,6 +60,7 @@ pub fn main() {
                 reload_bullet.after(move_system),
                 fire_bullets.after(move_system).after(reload_bullet),
                 move_bullet.after(fire_bullets),
+                despawn_bullets.after(move_bullet),
                 kill_players.after(move_bullet).after(move_system),
                 respawn_players.after(kill_players),
             )
@@ -86,6 +87,11 @@ pub struct BulletReady {
     pub timer: Timer,
 }
 
+#[derive(Component, Reflect, Default)]
+pub struct BulletLifetime {
+    pub timer: Timer,
+}
+
 #[derive(Component, Reflect, Default, Clone, Copy)]
 pub struct MoveDir(pub Vec2);
 
@@ -103,14 +109,18 @@ pub struct Target {
 }
 
 #[derive(Component, Reflect, Default)]
-pub struct Bullet;
+pub struct Bullet {
+    pub shooter: usize,
+}
 
 #[derive(AssetCollection, Resource)]
 struct ImageAssets {
     #[asset(path = "eggbullet.png")]
     bullet: Handle<Image>,
     #[asset(path = "ostrich.png")]
-    player: Handle<Image>,
+    player_1: Handle<Image>,
+    #[asset(path = "red_ostrich.png")]
+    player_2: Handle<Image>,
 }
 
 #[derive(Debug)]
@@ -169,7 +179,7 @@ fn spawn_players(
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
-            texture: images.player.clone(),
+            texture: images.player_1.clone(),
             transform: Transform::from_xyz(p1_position.x, p1_position.y, 0.0),
             ..Default::default()
         },
@@ -195,7 +205,7 @@ fn spawn_players(
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
-            texture: images.player.clone(),
+            texture: images.player_2.clone(),
             transform: Transform::from_xyz(p2_position.x, p2_position.y, 0.0),
             ..Default::default()
         },
@@ -361,7 +371,7 @@ pub fn input(
         target_y: 0.0,
     };
     let mut last_touch_timestamp: Option<Instant> = None;
-    let touch_threshold = Duration::from_millis(300);
+    let touch_threshold = Duration::from_secs_f32(0.5);
 
     for touch in touches.iter() {
         let touch_pos = touch.position();
@@ -403,7 +413,7 @@ pub fn input(
         input.inp |= INPUT_MOVE;
     }
 
-    if keys.any_pressed([KeyCode::Space, KeyCode::Return]) {
+    if keys.pressed(KeyCode::Q) {
         input.inp |= INPUT_FIRE;
     }
 
@@ -439,15 +449,20 @@ fn fire_bullets(
                 let player_pos = transform.translation.xy();
                 let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
                 commands.spawn((
-                    Bullet,
+                    Bullet {
+                        shooter: player.handle,
+                    },
                     rip.next(),
                     *move_dir,
+                    BulletLifetime {
+                        timer: Timer::from_seconds(0.7, TimerMode::Once),
+                    },
                     SpriteBundle {
-                        transform: Transform::from_translation(pos.extend(200.))
+                        transform: Transform::from_translation(pos.extend(500.))
                             .with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
                         texture: images.bullet.clone(),
                         sprite: Sprite {
-                            custom_size: Some(Vec2::new(0.7, 0.7)),
+                            custom_size: Some(Vec2::new(0.4, 0.4)),
                             ..default()
                         },
                         ..default()
@@ -479,23 +494,25 @@ fn reload_bullet(
 
 fn move_bullet(mut query: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
     for (mut transform, dir) in query.iter_mut() {
-        let delta = (dir.0 * 0.07).extend(0.);
+        let delta = (dir.0 * 0.1).extend(0.);
         transform.translation += delta;
     }
 }
 
 fn kill_players(
     mut commands: Commands,
-    player_query: Query<(Entity, &Transform), (With<Player>, Without<Bullet>)>,
-    bullet_query: Query<(Entity, &Transform), With<Bullet>>,
+    player_query: Query<(Entity, &Transform, &Player), (With<Player>, Without<Bullet>)>,
+    bullet_query: Query<(Entity, &Transform, &Bullet), With<Bullet>>,
 ) {
-    for (player, player_transform) in player_query.iter() {
-        for (bullet, bullet_transform) in bullet_query.iter() {
+    for (player, player_transform, player_info) in player_query.iter() {
+        for (bullet, bullet_transform, bullet_info) in bullet_query.iter() {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
                 bullet_transform.translation.xy(),
             );
-            if distance < PLAYER_RADIUS + BULLET_RADIUS {
+            // Check if the bullet's shooter handle is different from the player's handle
+            if distance < PLAYER_RADIUS + BULLET_RADIUS && bullet_info.shooter != player_info.handle
+            {
                 commands.entity(player).insert(Despawned);
                 commands.entity(bullet).despawn();
             }
@@ -529,5 +546,18 @@ fn log_ggrs_events(mut session: ResMut<Session<GgrsConfig>>) {
             }
         }
         _ => panic!("This example focuses on p2p."),
+    }
+}
+
+pub fn despawn_bullets(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut bullet_query: Query<(Entity, &mut BulletLifetime)>,
+) {
+    for (entity, mut lifetime) in bullet_query.iter_mut() {
+        lifetime.timer.tick(time.delta());
+        if lifetime.timer.finished() {
+            commands.entity(entity).despawn();
+        }
     }
 }
