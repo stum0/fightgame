@@ -371,7 +371,7 @@ pub fn input(
         target_y: 0.0,
     };
     let mut last_touch_timestamp: Option<Instant> = None;
-    let touch_threshold = Duration::from_secs_f32(0.5);
+    let touch_threshold = Duration::from_secs_f32(2.0);
 
     for touch in touches.iter() {
         let touch_pos = touch.position();
