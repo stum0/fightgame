@@ -3,6 +3,7 @@ use bevy_asset_loader::prelude::*;
 use bevy_ggrs::ggrs::PlayerType;
 use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
+use bevy_mod_simplest_healthbar::{HealthBar, HealthBarPlugin};
 use components::*;
 use log::Level;
 use nostr_sdk::{serde_json, Client, ClientMessage, EventBuilder, Keys, Tag};
@@ -25,6 +26,7 @@ pub fn main() {
         .register_rollback_component::<Target>()
         .register_rollback_component::<BulletReady>()
         .register_rollback_component::<MoveDir>()
+        .register_rollback_component::<Health>()
         .build(&mut app);
 
     app.add_state::<GameState>()
@@ -42,13 +44,22 @@ pub fn main() {
             }),
             ..default()
         }))
+        .add_plugin(
+            // Need to define which camera we are going to be spawning the stuff in relation to, as well as what is the "health" component
+            HealthBarPlugin::<Health, BarCamera>::new("fonts/quicksand-light.ttf")
+                // to automatically spawn bars on stuff with Health and a Transform
+                .automatic_bar_creation(true),
+        )
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
-        .add_systems((setup, start_matchbox_socket).in_schedule(OnEnter(GameState::Matchmaking)))
+        .add_systems(
+            (lobby_startup, start_matchbox_socket).in_schedule(OnEnter(GameState::Matchmaking)),
+        )
         .add_systems((
             wait_for_players.run_if(
                 resource_exists::<MatchboxSocket<SingleChannel>>()
                     .and_then(in_state(GameState::Matchmaking)),
             ),
+            lobby_cleanup.in_schedule(OnExit(GameState::Matchmaking)),
             spawn_players.in_schedule(OnEnter(GameState::InGame)),
         ))
         .add_system(log_ggrs_events.in_set(OnUpdate(GameState::InGame)))
@@ -58,8 +69,8 @@ pub fn main() {
                 reload_bullet.after(move_system),
                 fire_bullets.after(move_system).after(reload_bullet),
                 move_bullet.after(fire_bullets),
-                kill_players.after(move_bullet).after(move_system),
-                respawn_players.after(kill_players),
+                kill_players.after(move_bullet),
+                // respawn_players.after(kill_players),
             )
                 .in_schedule(GGRSSchedule),
         )
@@ -99,10 +110,51 @@ impl ggrs::Config for GgrsConfig {
     type Address = PeerId;
 }
 
-fn setup(mut commands: Commands) {
+fn lobby_startup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
-    commands.spawn(camera_bundle);
+    commands.spawn((camera_bundle, BarCamera));
+
+    // All this is just for spawning centered text.
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                size: Size::new(Val::Percent(100.0), Val::Percent(100.0)),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::FlexEnd,
+                ..default()
+            },
+            background_color: Color::rgb(0.43, 0.41, 0.38).into(),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn(TextBundle {
+                    style: Style {
+                        align_self: AlignSelf::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    text: Text::from_section(
+                        "Entering lobby...",
+                        TextStyle {
+                            font: asset_server.load("fonts/quicksand-light.ttf"),
+                            font_size: 30.,
+                            color: Color::BLACK,
+                        },
+                    ),
+                    ..default()
+                })
+                .insert(LobbyText);
+        })
+        .insert(LobbyUI);
+}
+
+fn lobby_cleanup(query: Query<Entity, With<LobbyUI>>, mut commands: Commands) {
+    for e in query.iter() {
+        commands.entity(e).despawn_recursive();
+    }
 }
 
 fn spawn_players(
@@ -125,6 +177,13 @@ fn spawn_players(
         },
         Target::default(),
         rip.next(),
+        Health { current: 6, max: 6 },
+        // Create custom size and color and offset for the "bar"
+        HealthBar {
+            offset: Vec2::new(0., 30.),
+            size: 20.,
+            color: Color::GREEN,
+        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(0., 0.47, 1.),
@@ -151,6 +210,13 @@ fn spawn_players(
         },
         Target::default(),
         rip.next(),
+        Health { current: 6, max: 6 },
+        // Create custom size and color and offset for the "bar"
+        HealthBar {
+            offset: Vec2::new(0., 30.),
+            size: 20.,
+            color: Color::GREEN,
+        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(1., 0.47, 0.),
@@ -214,6 +280,7 @@ fn wait_for_players(
     mut commands: Commands,
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut query: Query<&mut Text, With<LobbyText>>,
 ) {
     // regularly call update_peers to update the list of connected peers
     for (peer, new_state) in socket.update_peers() {
@@ -226,7 +293,7 @@ fn wait_for_players(
 
     let connected_peers = socket.connected_peers().count();
     let remaining = 2 - (connected_peers + 1);
-
+    query.single_mut().sections[0].value = format!("Waiting for {remaining} more player(s)",);
     if remaining > 0 {
         return;
     }
@@ -262,23 +329,23 @@ fn wait_for_players(
     next_state.set(GameState::InGame);
 }
 
-fn respawn_players(
-    mut commands: Commands,
-    player_query: Query<(Entity, &Player), (With<Despawned>, Without<Bullet>)>,
-) {
-    for (entity, player) in player_query.iter() {
-        let position = match player.handle {
-            0 => Vec2::new(-5.0, 0.0),
-            1 => Vec2::new(5.0, 0.0),
-            _ => unreachable!(),
-        };
+// fn respawn_players(
+//     mut commands: Commands,
+//     player_query: Query<(Entity, &Player), (With<Despawned>, Without<Bullet>)>,
+// ) {
+//     for (entity, player) in player_query.iter() {
+//         let position = match player.handle {
+//             0 => Vec2::new(-5.0, 0.0),
+//             1 => Vec2::new(5.0, 0.0),
+//             _ => unreachable!(),
+//         };
 
-        commands.entity(entity).remove::<Despawned>();
-        commands
-            .entity(entity)
-            .insert(Transform::from_xyz(position.x, position.y, 0.0));
-    }
-}
+//         commands.entity(entity).remove::<Despawned>();
+//         commands
+//             .entity(entity)
+//             .insert(Transform::from_xyz(position.x, position.y, 0.0));
+//     }
+// }
 
 fn log_ggrs_events(mut session: ResMut<Session<GgrsConfig>>) {
     match session.as_mut() {

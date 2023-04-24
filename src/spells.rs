@@ -2,7 +2,7 @@ use bevy::{math::Vec3Swizzles, prelude::*};
 use bevy_ggrs::{PlayerInputs, RollbackIdProvider};
 
 use crate::{
-    components::{Bullet, BulletDistance, BulletReady, Despawned, MoveDir, Player},
+    components::{Bullet, BulletDistance, BulletReady, Despawned, Health, MoveDir, Player},
     input::fire,
     GgrsConfig, ImageAssets,
 };
@@ -94,19 +94,25 @@ pub fn move_bullet(
 
 pub fn kill_players(
     mut commands: Commands,
-    player_query: Query<(Entity, &Transform, &Player), (With<Player>, Without<Bullet>)>,
+    mut player_query: Query<(&Transform, &Player, &mut Health), Without<Bullet>>,
+
     bullet_query: Query<(Entity, &Transform, &Bullet), With<Bullet>>,
 ) {
-    for (player, player_transform, player_info) in player_query.iter() {
+    for (player_transform, player_info, mut health) in player_query.iter_mut() {
         for (bullet, bullet_transform, bullet_info) in bullet_query.iter() {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
                 bullet_transform.translation.xy(),
             );
             // Check if the bullet's shooter handle is different from the player's handle
+
             if distance < PLAYER_RADIUS + BULLET_RADIUS && bullet_info.shooter != player_info.handle
             {
-                commands.entity(player).insert(Despawned);
+                if health.current > 0 {
+                    health.current -= 1;
+                } else {
+                    health.current = 6;
+                }
                 commands.entity(bullet).despawn();
             }
         }
