@@ -9,7 +9,7 @@ use crate::{
 
 const PLAYER_RADIUS: f32 = 0.5;
 const BULLET_RADIUS: f32 = 0.025;
-pub const BULLET_SPEED: f32 = 0.4;
+pub const BULLET_SPEED: f32 = 0.1;
 
 pub fn fire_bullets(
     mut commands: Commands,

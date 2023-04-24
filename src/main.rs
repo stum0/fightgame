@@ -250,7 +250,7 @@ fn start_matchbox_socket(mut commands: Commands) {
     //list game
     spawn_local(async move {
         let pub_key = PeerId(nostr_keys_clone.public_key());
-        let tag = "matchbox-nostr";
+        let tag = "matchbox-nostr-1";
         let new_peer = PeerEvent::NewPeer(pub_key);
         let new_peer = serde_json::to_string(&new_peer).expect("serializing request");
 
