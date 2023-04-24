@@ -15,8 +15,10 @@ serde = "1.0.160"
 bevy_asset_loader = "0.16.0"
 log = "0.4"
 console_log = { version = "1"}
+nostr-sdk = "0.21"
+wasm-bindgen-futures = "0.4"
 
 
 [profile.release]
 lto = "thin"
-opt-level = 's'
+opt-level = 'z'

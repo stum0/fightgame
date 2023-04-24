@@ -1,20 +1,18 @@
-use std::time::Duration;
-
-use bevy::math::Vec3Swizzles;
-use bevy::utils::Instant;
 use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
 use bevy_asset_loader::prelude::*;
 use bevy_ggrs::ggrs::PlayerType;
-use bevy_ggrs::{
-    ggrs, GGRSPlugin, GGRSSchedule, PlayerInputs, Rollback, RollbackIdProvider, Session,
-};
+use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
-use bytemuck::{Pod, Zeroable};
+use components::*;
 use log::Level;
+use nostr_sdk::{serde_json, Client, ClientMessage, EventBuilder, Keys, Tag};
 use serde::{Deserialize, Serialize};
-
-const INPUT_MOVE: u8 = 1 << 0;
-const INPUT_FIRE: u8 = 1 << 1;
+use wasm_bindgen_futures::spawn_local;
+mod components;
+use spells::*;
+mod spells;
+use input::*;
+mod input;
 
 pub fn main() {
     console_log::init_with_level(Level::Warn).expect("error initializing log");
@@ -60,7 +58,6 @@ pub fn main() {
                 reload_bullet.after(move_system),
                 fire_bullets.after(move_system).after(reload_bullet),
                 move_bullet.after(fire_bullets),
-                despawn_bullets.after(move_bullet),
                 kill_players.after(move_bullet).after(move_system),
                 respawn_players.after(kill_players),
             )
@@ -81,40 +78,8 @@ enum GameState {
 #[derive(Resource)]
 struct LocalPlayerHandle(usize);
 
-#[derive(Component, Reflect, Default)]
-pub struct BulletReady {
-    pub ready: bool,
-    pub timer: Timer,
-}
-
-#[derive(Component, Reflect, Default)]
-pub struct BulletLifetime {
-    pub timer: Timer,
-}
-
-#[derive(Component, Reflect, Default, Clone, Copy)]
-pub struct MoveDir(pub Vec2);
-
-#[derive(Component)]
-pub struct Player {
-    pub facing_right: bool,
-    handle: usize,
-    moving: bool,
-}
-
-#[derive(Default, Reflect, Component)]
-pub struct Target {
-    pub x: f32,
-    pub y: f32,
-}
-
-#[derive(Component, Reflect, Default)]
-pub struct Bullet {
-    pub shooter: usize,
-}
-
 #[derive(AssetCollection, Resource)]
-struct ImageAssets {
+pub struct ImageAssets {
     #[asset(path = "eggbullet.png")]
     bullet: Handle<Image>,
     #[asset(path = "ostrich.png")]
@@ -124,7 +89,7 @@ struct ImageAssets {
 }
 
 #[derive(Debug)]
-struct GgrsConfig;
+pub struct GgrsConfig;
 
 impl ggrs::Config for GgrsConfig {
     // 4-directions + fire fits easily in a single byte
@@ -133,19 +98,6 @@ impl ggrs::Config for GgrsConfig {
     // Matchbox' WebRtcSocket addresses are called `PeerId`s
     type Address = PeerId;
 }
-
-#[derive(Component)]
-pub struct Despawned;
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct CustomInput {
-    pub inp: u8,
-    pub target_x: f32,
-    pub target_y: f32,
-}
-
-unsafe impl Zeroable for CustomInput {}
-unsafe impl Pod for CustomInput {}
 
 fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();
@@ -212,97 +164,50 @@ fn spawn_players(
     ));
 }
 
-fn get_click_position(
-    window: &Window,
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    cursor_position: Vec2,
-) -> Vec2 {
-    let screen_size = Vec2::new(window.width(), window.height());
-    let screen_position = cursor_position / screen_size;
-    let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
-    let mut click_position = camera
-        .projection_matrix()
-        .inverse()
-        .project_point3(clip_position.extend(0.0));
-    click_position = *camera_transform * click_position;
-    click_position.truncate()
-}
-
-fn get_touch_position(
-    window: &Window,
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    cursor_position: Vec2,
-) -> Vec2 {
-    let screen_size = Vec2::new(window.width(), window.height());
-    let screen_position = Vec2::new(
-        cursor_position.x / screen_size.x,
-        1.0 - (cursor_position.y / screen_size.y),
-    );
-    let clip_position = (screen_position - Vec2::new(0.5, 0.5)) * 2.0;
-    let mut touch_position = camera
-        .projection_matrix()
-        .inverse()
-        .project_point3(clip_position.extend(0.0));
-    touch_position = *camera_transform * touch_position;
-    touch_position.truncate()
-}
-
-fn move_system(
-    mut query: Query<(&mut Transform, &mut Target, &mut Player, &mut MoveDir), With<Rollback>>,
-    inputs: Res<PlayerInputs<GgrsConfig>>,
-    time: Res<Time>,
-) {
-    for (mut t, mut tg, mut p, mut move_dir) in query.iter_mut() {
-        let input = inputs[p.handle].0.inp;
-
-        if input & INPUT_MOVE != 0 {
-            let click_position =
-                Vec2::new(inputs[p.handle].0.target_x, inputs[p.handle].0.target_y);
-
-            tg.x = click_position.x;
-            tg.y = click_position.y;
-            p.moving = true;
-        }
-
-        if p.moving {
-            let current_position = Vec2::new(t.translation.x, t.translation.y);
-            let direction = Vec2::new(tg.x, tg.y) - current_position;
-            let distance_to_target = direction.length();
-
-            if distance_to_target > 0.0 {
-                let player_speed = 10.0;
-                let normalized_direction = direction / distance_to_target;
-                let movement = normalized_direction * player_speed * time.delta_seconds();
-
-                if movement.length() < distance_to_target {
-                    t.translation += Vec3::new(movement.x, movement.y, 0.0);
-                } else {
-                    t.translation = Vec3::new(tg.x, tg.y, 0.0);
-                    p.moving = false;
-                }
-                if normalized_direction.x > 0.0 {
-                    move_dir.0 = Vec2::X;
-                    p.facing_right = true;
-                } else {
-                    move_dir.0 = -Vec2::X;
-                    p.facing_right = false;
-                }
-            } else {
-                p.moving = false;
-            }
-        }
-    }
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PeerEvent {
+    /// Sent by the server to the connecting peer, immediately after connection
+    /// before any other events
+    NewPeer(PeerId),
 }
 
 fn start_matchbox_socket(mut commands: Commands) {
     // let room_url = "ws://localhost:8080";
-    let room_url = "wss://nostr.lu.ke";
+    let relay = "wss://nostr.lu.ke";
 
     //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
-    info!("connecting to nostr relay: {:?}", room_url);
-    commands.open_socket(WebRtcSocketBuilder::new(room_url).add_channel(ChannelConfig::ggrs()));
+    let nostr_keys = Keys::generate();
+    let nostr_keys_clone = nostr_keys.clone();
+
+    info!("connecting to nostr relay: {:?}", relay);
+
+    //list game
+    spawn_local(async move {
+        let pub_key = PeerId(nostr_keys_clone.public_key());
+        let tag = "matchbox-nostr";
+        let new_peer = PeerEvent::NewPeer(pub_key);
+        let new_peer = serde_json::to_string(&new_peer).expect("serializing request");
+
+        let broadcast_peer = ClientMessage::new_event(
+            EventBuilder::new_text_note(new_peer, &[Tag::Hashtag(tag.to_string())])
+                .to_event(&nostr_keys_clone)
+                .unwrap(),
+        );
+
+        warn!("BROADCAST PEER ID {:?}", broadcast_peer);
+
+        let client = Client::new(&nostr_keys_clone);
+        #[cfg(target_arch = "wasm32")]
+        client.add_relay(relay).await.unwrap();
+
+        client.connect().await;
+        client.send_msg(broadcast_peer).await.unwrap();
+        client.disconnect().await.unwrap();
+    });
+
+    commands.open_socket(
+        WebRtcSocketBuilder::new(relay, nostr_keys).add_channel(ChannelConfig::ggrs()),
+    );
 }
 
 fn wait_for_players(
@@ -357,169 +262,6 @@ fn wait_for_players(
     next_state.set(GameState::InGame);
 }
 
-pub fn input(
-    _handle: In<ggrs::PlayerHandle>,
-    keys: Res<Input<KeyCode>>,
-    mouse: Res<Input<MouseButton>>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-    mut windows: Query<&mut Window>,
-    touches: Res<Touches>,
-) -> CustomInput {
-    let mut input = CustomInput {
-        inp: 0,
-        target_x: 0.0,
-        target_y: 0.0,
-    };
-    let mut last_touch_timestamp: Option<Instant> = None;
-    let touch_threshold = Duration::from_secs_f32(2.0);
-
-    for touch in touches.iter() {
-        let touch_pos = touch.position();
-        let (camera, camera_transform) = camera_query.single();
-
-        for window in windows.iter_mut() {
-            let touch_position = get_touch_position(&window, camera, camera_transform, touch_pos);
-            input.target_x = touch_position.x;
-            input.target_y = touch_position.y;
-        }
-
-        // Check if the current touch is within the threshold since the last touch
-        if let Some(last_timestamp) = last_touch_timestamp {
-            if Instant::now().duration_since(last_timestamp) < touch_threshold {
-                // If within the threshold, trigger the shoot action and don't move
-                input.inp |= INPUT_FIRE;
-                last_touch_timestamp = None;
-            } else {
-                // If not within the threshold, update the last touch timestamp and move
-                last_touch_timestamp = Some(Instant::now());
-                input.inp |= INPUT_MOVE;
-            }
-        } else {
-            // If there was no previous touch, update the last touch timestamp and move
-            last_touch_timestamp = Some(Instant::now());
-            input.inp |= INPUT_MOVE;
-        }
-    }
-
-    if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
-        for window in windows.iter_mut() {
-            if let Some(cursor) = window.cursor_position() {
-                let (camera, camera_transform) = camera_query.single();
-                let click_position = get_click_position(&window, camera, camera_transform, cursor);
-                input.target_x = click_position.x;
-                input.target_y = click_position.y;
-            }
-        }
-        input.inp |= INPUT_MOVE;
-    }
-
-    if keys.pressed(KeyCode::Q) {
-        input.inp |= INPUT_FIRE;
-    }
-
-    input
-}
-
-pub fn update_facing(mut player_query: Query<(&Player, &mut Transform)>) {
-    for (player, mut transform) in player_query.iter_mut() {
-        if player.facing_right {
-            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI); // Face right
-        } else {
-            transform.rotation = Quat::from_rotation_y(0.0);
-            // Face left
-        }
-    }
-}
-const PLAYER_RADIUS: f32 = 0.5;
-const BULLET_RADIUS: f32 = 0.025;
-
-fn fire_bullets(
-    mut commands: Commands,
-    inputs: Res<PlayerInputs<GgrsConfig>>,
-    images: Res<ImageAssets>,
-    mut player_query: Query<(&Transform, &Player, &mut BulletReady, &MoveDir)>,
-    mut rip: ResMut<RollbackIdProvider>,
-    time: Res<Time>,
-) {
-    for (transform, player, mut bullet_ready, move_dir) in player_query.iter_mut() {
-        let (input, _) = inputs[player.handle];
-        if fire(input) && bullet_ready.ready {
-            bullet_ready.timer.tick(time.delta());
-            if bullet_ready.timer.finished() {
-                let player_pos = transform.translation.xy();
-                let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
-                commands.spawn((
-                    Bullet {
-                        shooter: player.handle,
-                    },
-                    rip.next(),
-                    *move_dir,
-                    BulletLifetime {
-                        timer: Timer::from_seconds(0.7, TimerMode::Once),
-                    },
-                    SpriteBundle {
-                        transform: Transform::from_translation(pos.extend(500.))
-                            .with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
-                        texture: images.bullet.clone(),
-                        sprite: Sprite {
-                            custom_size: Some(Vec2::new(0.4, 0.4)),
-                            ..default()
-                        },
-                        ..default()
-                    },
-                ));
-                bullet_ready.timer.reset();
-            }
-        } else {
-            bullet_ready.timer.tick(time.delta());
-        }
-    }
-}
-
-pub fn fire(input: CustomInput) -> bool {
-    input.inp & INPUT_FIRE != 0
-}
-
-fn reload_bullet(
-    inputs: Res<PlayerInputs<GgrsConfig>>,
-    mut query: Query<(&mut BulletReady, &Player)>,
-) {
-    for (mut can_fire, player) in query.iter_mut() {
-        let (input, _) = inputs[player.handle];
-        if !fire(input) {
-            can_fire.ready = true;
-        }
-    }
-}
-
-fn move_bullet(mut query: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
-    for (mut transform, dir) in query.iter_mut() {
-        let delta = (dir.0 * 0.1).extend(0.);
-        transform.translation += delta;
-    }
-}
-
-fn kill_players(
-    mut commands: Commands,
-    player_query: Query<(Entity, &Transform, &Player), (With<Player>, Without<Bullet>)>,
-    bullet_query: Query<(Entity, &Transform, &Bullet), With<Bullet>>,
-) {
-    for (player, player_transform, player_info) in player_query.iter() {
-        for (bullet, bullet_transform, bullet_info) in bullet_query.iter() {
-            let distance = Vec2::distance(
-                player_transform.translation.xy(),
-                bullet_transform.translation.xy(),
-            );
-            // Check if the bullet's shooter handle is different from the player's handle
-            if distance < PLAYER_RADIUS + BULLET_RADIUS && bullet_info.shooter != player_info.handle
-            {
-                commands.entity(player).insert(Despawned);
-                commands.entity(bullet).despawn();
-            }
-        }
-    }
-}
-
 fn respawn_players(
     mut commands: Commands,
     player_query: Query<(Entity, &Player), (With<Despawned>, Without<Bullet>)>,
@@ -546,18 +288,5 @@ fn log_ggrs_events(mut session: ResMut<Session<GgrsConfig>>) {
             }
         }
         _ => panic!("This example focuses on p2p."),
-    }
-}
-
-pub fn despawn_bullets(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut bullet_query: Query<(Entity, &mut BulletLifetime)>,
-) {
-    for (entity, mut lifetime) in bullet_query.iter_mut() {
-        lifetime.timer.tick(time.delta());
-        if lifetime.timer.finished() {
-            commands.entity(entity).despawn();
-        }
     }
 }
