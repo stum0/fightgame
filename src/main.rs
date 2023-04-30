@@ -56,7 +56,6 @@ pub fn main() {
         }))
         .add_plugin(EguiPlugin)
         .add_system(menu.run_if(in_state(GameState::Menu)))
-        .add_system(find_game.run_if(in_state(GameState::FindGameMenu)))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_system(start_matchbox_socket.in_schedule(OnEnter(GameState::Matchmaking)))
         .add_systems((
@@ -83,6 +82,7 @@ pub fn main() {
             name: String::new(),
         })
         .insert_resource(GamesList(Arc::new(Mutex::new(Vec::new()))))
+        .insert_resource(SearchGames { search: true })
         .run();
 }
 
@@ -91,7 +91,6 @@ enum GameState {
     #[default]
     AssetLoading,
     Menu,
-    FindGameMenu,
     Matchmaking,
     InGame,
 }
@@ -102,6 +101,11 @@ struct LocalPlayerHandle(usize);
 #[derive(Resource, Default, Debug)]
 pub struct GameName {
     pub name: String,
+}
+
+#[derive(Resource, Default, Debug)]
+pub struct SearchGames {
+    pub search: bool,
 }
 
 #[derive(Resource)]
@@ -152,9 +156,13 @@ fn menu(
     window: Query<&Window>,
     mut next_state: ResMut<NextState<GameState>>,
     nostr_query: Query<&Nostr>,
+    games_list: Res<GamesList>,
     mut game_name: ResMut<GameName>,
+    mut search_games: ResMut<SearchGames>,
 ) {
     let nostr = nostr_query.iter().next().unwrap();
+    let nostr_keys = nostr.keys.clone();
+    let relay = nostr.relay.clone();
 
     let window = window.iter().next().unwrap();
     let screen_size = egui::Vec2::new(window.width(), window.height());
@@ -164,6 +172,7 @@ fn menu(
     egui::Window::new("web21")
         .resizable(false)
         .collapsible(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .fixed_pos(pos)
         .show(contexts.ctx_mut(), |ui| {
             ui.add(
@@ -173,7 +182,6 @@ fn menu(
             );
 
             if ui.button("Create Game").clicked() && !game_name.name.is_empty() {
-                //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
                 let game_name = game_name.name.clone();
                 let nostr_keys = nostr.keys.clone();
                 let relay = nostr.relay.clone();
@@ -203,35 +211,8 @@ fn menu(
                 });
                 next_state.set(GameState::Matchmaking);
             }
-            if ui.button("Find Game").clicked() {
-                next_state.set(GameState::FindGameMenu);
-            };
-        });
-}
 
-fn find_game(
-    nostr_query: Query<&Nostr>,
-    mut contexts: EguiContexts,
-    window: Query<&Window>,
-    games_list: Res<GamesList>,
-    mut next_state: ResMut<NextState<GameState>>,
-) {
-    let window = window.iter().next().unwrap();
-    let screen_size = egui::Vec2::new(window.width(), window.height());
-    let screen_center = screen_size / 2.0;
-    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
-
-    let nostr = nostr_query.iter().next().unwrap();
-    let nostr_keys = nostr.keys.clone();
-    let relay = nostr.relay.clone();
-
-    //info!("GAME FOUND {:?}", games_lock);
-    egui::Window::new("web21")
-        .resizable(false)
-        .collapsible(false)
-        .fixed_pos(pos)
-        .show(contexts.ctx_mut(), |ui| {
-            if ui.button("Search for games").clicked() {
+            if search_games.search {
                 let games_handle = games_list.0.clone();
                 info!("connecting to nostr relay: {:?}", relay);
                 spawn_local(async move {
@@ -275,9 +256,17 @@ fn find_game(
                         .await
                         .unwrap();
                 });
+                search_games.search = false;
             }
 
             let games_lock = games_list.0.lock().unwrap();
+            ui.separator();
+            ui.label("searching for games...");
+            ui.separator();
+            if games_lock.is_empty() {
+                ui.label("No games found, please wait or create a game.");
+            }
+
             for game in games_lock.iter() {
                 let list_game = format!("GAME NAME: {} CREATED BY: {}", game.name, game.created_by);
                 if ui.button(list_game).clicked() {
@@ -391,7 +380,22 @@ fn wait_for_players(
     mut commands: Commands,
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut contexts: EguiContexts,
+    window: Query<&Window>,
 ) {
+    let window = window.iter().next().unwrap();
+    let screen_size = egui::Vec2::new(window.width(), window.height());
+    let screen_center = screen_size / 2.0;
+    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
+
+    egui::Window::new("web21")
+        .resizable(false)
+        .collapsible(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .fixed_pos(pos)
+        .show(contexts.ctx_mut(), |ui| {
+            ui.heading("Waiting for players...");
+        });
     // regularly call update_peers to update the list of connected peers
     for (peer, new_state) in socket.update_peers() {
         // you can also handle the specific dis(connections) as they occur:
