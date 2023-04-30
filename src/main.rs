@@ -1,12 +1,21 @@
-use bevy::{prelude::*, render::camera::ScalingMode, window::Window};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use bevy::render::camera::ScalingMode;
+use bevy::{prelude::*, window::Window};
 use bevy_asset_loader::prelude::*;
+use bevy_egui::egui::{Pos2, TextEdit};
 use bevy_ggrs::ggrs::PlayerType;
 use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
-use bevy_mod_simplest_healthbar::{HealthBar, HealthBarPlugin};
 use components::*;
 use log::Level;
-use nostr_sdk::{serde_json, Client, ClientMessage, EventBuilder, Keys, Tag};
+use nostr_sdk::prelude::{FromBech32, ToBech32};
+use nostr_sdk::secp256k1::XOnlyPublicKey;
+use nostr_sdk::{
+    serde_json, Client, ClientMessage, EventBuilder, Filter, Keys, RelayPoolNotification, Tag,
+    Timestamp,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
 mod components;
@@ -14,6 +23,7 @@ use spells::*;
 mod spells;
 use input::*;
 mod input;
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
 pub fn main() {
     console_log::init_with_level(Level::Warn).expect("error initializing log");
@@ -26,14 +36,14 @@ pub fn main() {
         .register_rollback_component::<Target>()
         .register_rollback_component::<BulletReady>()
         .register_rollback_component::<MoveDir>()
-        .register_rollback_component::<Health>()
         .build(&mut app);
 
     app.add_state::<GameState>()
         .add_loading_state(
-            LoadingState::new(GameState::AssetLoading).continue_to_state(GameState::Matchmaking),
+            LoadingState::new(GameState::AssetLoading).continue_to_state(GameState::Menu),
         )
         .add_collection_to_loading_state::<_, ImageAssets>(GameState::AssetLoading)
+        .add_system(create_nostr_key.in_schedule(OnEnter(GameState::AssetLoading)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "SwordGame".to_string(),
@@ -44,22 +54,16 @@ pub fn main() {
             }),
             ..default()
         }))
-        .add_plugin(
-            // Need to define which camera we are going to be spawning the stuff in relation to, as well as what is the "health" component
-            HealthBarPlugin::<Health, BarCamera>::new("fonts/quicksand-light.ttf")
-                // to automatically spawn bars on stuff with Health and a Transform
-                .automatic_bar_creation(true),
-        )
+        .add_plugin(EguiPlugin)
+        .add_system(menu.run_if(in_state(GameState::Menu)))
+        .add_system(find_game.run_if(in_state(GameState::FindGameMenu)))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
-        .add_systems(
-            (lobby_startup, start_matchbox_socket).in_schedule(OnEnter(GameState::Matchmaking)),
-        )
+        .add_system(start_matchbox_socket.in_schedule(OnEnter(GameState::Matchmaking)))
         .add_systems((
             wait_for_players.run_if(
                 resource_exists::<MatchboxSocket<SingleChannel>>()
                     .and_then(in_state(GameState::Matchmaking)),
             ),
-            lobby_cleanup.in_schedule(OnExit(GameState::Matchmaking)),
             spawn_players.in_schedule(OnEnter(GameState::InGame)),
         ))
         .add_system(log_ggrs_events.in_set(OnUpdate(GameState::InGame)))
@@ -75,6 +79,10 @@ pub fn main() {
                 .in_schedule(GGRSSchedule),
         )
         .add_system(update_facing)
+        .insert_resource(GameName {
+            name: String::new(),
+        })
+        .insert_resource(GamesList(Arc::new(Mutex::new(Vec::new()))))
         .run();
 }
 
@@ -82,12 +90,22 @@ pub fn main() {
 enum GameState {
     #[default]
     AssetLoading,
+    Menu,
+    FindGameMenu,
     Matchmaking,
     InGame,
 }
 
 #[derive(Resource)]
 struct LocalPlayerHandle(usize);
+
+#[derive(Resource, Default, Debug)]
+pub struct GameName {
+    pub name: String,
+}
+
+#[derive(Resource)]
+pub struct GamesList(pub Arc<Mutex<Vec<Game>>>);
 
 #[derive(AssetCollection, Resource)]
 pub struct ImageAssets {
@@ -110,51 +128,186 @@ impl ggrs::Config for GgrsConfig {
     type Address = PeerId;
 }
 
-fn lobby_startup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let mut camera_bundle = Camera2dBundle::default();
-    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
-    commands.spawn((camera_bundle, BarCamera));
-
-    // All this is just for spawning centered text.
-    commands
-        .spawn(NodeBundle {
-            style: Style {
-                size: Size::new(Val::Percent(100.0), Val::Percent(100.0)),
-                position_type: PositionType::Absolute,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::FlexEnd,
-                ..default()
-            },
-            background_color: Color::rgb(0.43, 0.41, 0.38).into(),
-            ..default()
-        })
-        .with_children(|parent| {
-            parent
-                .spawn(TextBundle {
-                    style: Style {
-                        align_self: AlignSelf::Center,
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
-                    text: Text::from_section(
-                        "Entering lobby...",
-                        TextStyle {
-                            font: asset_server.load("fonts/quicksand-light.ttf"),
-                            font_size: 30.,
-                            color: Color::BLACK,
-                        },
-                    ),
-                    ..default()
-                })
-                .insert(LobbyText);
-        })
-        .insert(LobbyUI);
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Game {
+    pub name: String,
+    pub created_by: String,
 }
 
-fn lobby_cleanup(query: Query<Entity, With<LobbyUI>>, mut commands: Commands) {
-    for e in query.iter() {
-        commands.entity(e).despawn_recursive();
+impl Game {
+    pub fn display_name(&self) -> String {
+        format!("Game Name: {}, Created by: {}", self.name, self.created_by)
     }
+}
+
+fn create_nostr_key(mut commands: Commands) {
+    let keys = Keys::generate();
+    let relay = "wss://nostr.lu.ke".to_string();
+    //let relay = "ws://localhost:8080".to_string();
+    commands.spawn(Nostr { relay, keys });
+}
+
+fn menu(
+    mut contexts: EguiContexts,
+    window: Query<&Window>,
+    mut next_state: ResMut<NextState<GameState>>,
+    nostr_query: Query<&Nostr>,
+    mut game_name: ResMut<GameName>,
+) {
+    let nostr = nostr_query.iter().next().unwrap();
+
+    let window = window.iter().next().unwrap();
+    let screen_size = egui::Vec2::new(window.width(), window.height());
+    let screen_center = screen_size / 2.0;
+    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
+
+    egui::Window::new("web21")
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(pos)
+        .show(contexts.ctx_mut(), |ui| {
+            ui.add(
+                TextEdit::singleline(&mut game_name.name)
+                    .hint_text("Enter game name")
+                    .id(egui::Id::new("game_name_input")),
+            );
+
+            if ui.button("Create Game").clicked() && !game_name.name.is_empty() {
+                //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
+                let game_name = game_name.name.clone();
+                let nostr_keys = nostr.keys.clone();
+                let relay = nostr.relay.clone();
+
+                info!("connecting to nostr relay: {:?}", relay);
+
+                //list game
+                spawn_local(async move {
+                    let tag = "matchbox-nostr-v1";
+                    let new_game = serde_json::to_string(&game_name).expect("serializing request");
+
+                    let broadcast_peer = ClientMessage::new_event(
+                        EventBuilder::new_text_note(new_game, &[Tag::Hashtag(tag.to_string())])
+                            .to_event(&nostr_keys)
+                            .unwrap(),
+                    );
+
+                    warn!("LIST GAME {:?}", broadcast_peer);
+
+                    let client = Client::new(&nostr_keys);
+                    #[cfg(target_arch = "wasm32")]
+                    client.add_relay(&relay).await.unwrap();
+
+                    client.connect().await;
+                    client.send_msg(broadcast_peer).await.unwrap();
+                    client.disconnect().await.unwrap();
+                });
+                next_state.set(GameState::Matchmaking);
+            }
+            if ui.button("Find Game").clicked() {
+                next_state.set(GameState::FindGameMenu);
+            };
+        });
+}
+
+fn find_game(
+    nostr_query: Query<&Nostr>,
+    mut contexts: EguiContexts,
+    window: Query<&Window>,
+    games_list: Res<GamesList>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    let window = window.iter().next().unwrap();
+    let screen_size = egui::Vec2::new(window.width(), window.height());
+    let screen_center = screen_size / 2.0;
+    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
+
+    let nostr = nostr_query.iter().next().unwrap();
+    let nostr_keys = nostr.keys.clone();
+    let relay = nostr.relay.clone();
+
+    //info!("GAME FOUND {:?}", games_lock);
+    egui::Window::new("web21")
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(pos)
+        .show(contexts.ctx_mut(), |ui| {
+            if ui.button("Search for games").clicked() {
+                let games_handle = games_list.0.clone();
+                info!("connecting to nostr relay: {:?}", relay);
+                spawn_local(async move {
+                    let tag = "matchbox-nostr-v1";
+
+                    info!("LOOKING FOR GAMES");
+
+                    let client = Client::new(&nostr_keys);
+                    #[cfg(target_arch = "wasm32")]
+                    client.add_relay(&relay).await.unwrap();
+
+                    client.connect().await;
+                    //send sub message
+
+                    let subscription = Filter::new()
+                        .since(Timestamp::now() - Duration::from_secs(60))
+                        .hashtag(tag);
+
+                    client.subscribe(vec![subscription]).await;
+
+                    client
+                        .handle_notifications(move |notification| {
+                            let games = games_handle.clone();
+                            async move {
+                                if let RelayPoolNotification::Event(_url, event) = notification {
+                                    info!("{:?}", event.content);
+                                    let game_name: String = serde_json::from_str(&event.content)
+                                        .expect("deserializing request");
+
+                                    let mut games_lock = games.lock().unwrap();
+
+                                    let game = Game {
+                                        name: game_name,
+                                        created_by: event.pubkey.to_bech32().unwrap(),
+                                    };
+                                    games_lock.push(game);
+                                }
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                });
+            }
+
+            let games_lock = games_list.0.lock().unwrap();
+            for game in games_lock.iter() {
+                let list_game = format!("GAME NAME: {} CREATED BY: {}", game.name, game.created_by);
+                if ui.button(list_game).clicked() {
+                    //send nostr dm with peer id to game creator
+                    let reciever = XOnlyPublicKey::from_bech32(game.clone().created_by).unwrap();
+
+                    let nostr_keys = nostr.keys.clone();
+                    let relay = nostr.relay.clone();
+
+                    info!("connecting to nostr relay: {:?}", relay);
+
+                    //list game
+                    spawn_local(async move {
+                        let pub_key = PeerId(nostr_keys.public_key());
+                        let new_peer = PeerEvent::NewPeer(pub_key);
+                        let new_peer =
+                            serde_json::to_string(&new_peer).expect("serializing request");
+
+                        let client = Client::new(&nostr_keys);
+                        #[cfg(target_arch = "wasm32")]
+                        client.add_relay(&relay).await.unwrap();
+
+                        client.connect().await;
+                        client.send_direct_msg(reciever, new_peer).await.unwrap();
+                        client.disconnect().await.unwrap();
+                    });
+                    next_state.set(GameState::Matchmaking);
+                }
+            }
+        });
 }
 
 fn spawn_players(
@@ -162,6 +315,10 @@ fn spawn_players(
     mut rip: ResMut<RollbackIdProvider>,
     images: Res<ImageAssets>,
 ) {
+    let mut camera_bundle = Camera2dBundle::default();
+    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
+    commands.spawn(camera_bundle);
+
     //player 1
     let p1_position = Vec2::new(-5.0, 0.0);
     commands.spawn((
@@ -171,19 +328,10 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(Vec2::X),
-        BulletReady {
-            ready: true,
-            timer: Timer::from_seconds(1.0, TimerMode::Once),
-        },
+        BulletReady(true),
         Target::default(),
         rip.next(),
-        Health { current: 6, max: 6 },
         // Create custom size and color and offset for the "bar"
-        HealthBar {
-            offset: Vec2::new(0., 30.),
-            size: 20.,
-            color: Color::GREEN,
-        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(0., 0.47, 1.),
@@ -204,19 +352,9 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(-Vec2::X),
-        BulletReady {
-            ready: true,
-            timer: Timer::from_seconds(1.0, TimerMode::Once),
-        },
+        BulletReady(true),
         Target::default(),
         rip.next(),
-        Health { current: 6, max: 6 },
-        // Create custom size and color and offset for the "bar"
-        HealthBar {
-            offset: Vec2::new(0., 30.),
-            size: 20.,
-            color: Color::GREEN,
-        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(1., 0.47, 0.),
@@ -237,42 +375,15 @@ pub enum PeerEvent {
     NewPeer(PeerId),
 }
 
-fn start_matchbox_socket(mut commands: Commands) {
+fn start_matchbox_socket(mut commands: Commands, nostr_query: Query<&Nostr>) {
     // let room_url = "ws://localhost:8080";
-    let relay = "wss://nostr.lu.ke";
+    let nostr = nostr_query.iter().next().unwrap();
 
-    //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
-    let nostr_keys = Keys::generate();
-    let nostr_keys_clone = nostr_keys.clone();
-
-    info!("connecting to nostr relay: {:?}", relay);
-
-    //list game
-    spawn_local(async move {
-        let pub_key = PeerId(nostr_keys_clone.public_key());
-        let tag = "matchbox-nostr-1";
-        let new_peer = PeerEvent::NewPeer(pub_key);
-        let new_peer = serde_json::to_string(&new_peer).expect("serializing request");
-
-        let broadcast_peer = ClientMessage::new_event(
-            EventBuilder::new_text_note(new_peer, &[Tag::Hashtag(tag.to_string())])
-                .to_event(&nostr_keys_clone)
-                .unwrap(),
-        );
-
-        warn!("BROADCAST PEER ID {:?}", broadcast_peer);
-
-        let client = Client::new(&nostr_keys_clone);
-        #[cfg(target_arch = "wasm32")]
-        client.add_relay(relay).await.unwrap();
-
-        client.connect().await;
-        client.send_msg(broadcast_peer).await.unwrap();
-        client.disconnect().await.unwrap();
-    });
-
+    warn!("connecting to nostr relay: {:?}", nostr.relay);
+    warn!("pubkey: {:?}", nostr.keys.public_key());
     commands.open_socket(
-        WebRtcSocketBuilder::new(relay, nostr_keys).add_channel(ChannelConfig::ggrs()),
+        WebRtcSocketBuilder::new(nostr.relay.to_owned(), nostr.keys.clone())
+            .add_channel(ChannelConfig::ggrs()),
     );
 }
 
@@ -280,7 +391,6 @@ fn wait_for_players(
     mut commands: Commands,
     mut socket: ResMut<MatchboxSocket<SingleChannel>>,
     mut next_state: ResMut<NextState<GameState>>,
-    mut query: Query<&mut Text, With<LobbyText>>,
 ) {
     // regularly call update_peers to update the list of connected peers
     for (peer, new_state) in socket.update_peers() {
@@ -293,7 +403,7 @@ fn wait_for_players(
 
     let connected_peers = socket.connected_peers().count();
     let remaining = 2 - (connected_peers + 1);
-    query.single_mut().sections[0].value = format!("Waiting for {remaining} more player(s)",);
+
     if remaining > 0 {
         return;
     }

@@ -1,11 +1,8 @@
 use bevy::prelude::*;
-use bevy_mod_simplest_healthbar::HealthTrait;
+use nostr_sdk::Keys;
 
 #[derive(Component, Reflect, Default)]
-pub struct BulletReady {
-    pub ready: bool,
-    pub timer: Timer,
-}
+pub struct BulletReady(pub bool);
 
 #[derive(Component, Reflect, Default)]
 pub struct BulletDistance {
@@ -37,24 +34,7 @@ pub struct Bullet {
 pub struct Despawned;
 
 #[derive(Component)]
-pub struct LobbyText;
-#[derive(Component)]
-pub struct LobbyUI;
-
-#[derive(Component, Reflect, Default, Clone, Copy)]
-pub struct Health {
-    pub current: u32,
-    pub max: u32,
+pub struct Nostr {
+    pub keys: Keys,
+    pub relay: String,
 }
-impl HealthTrait for Health {
-    fn current(&self) -> u32 {
-        self.current
-    }
-
-    fn max(&self) -> u32 {
-        self.max
-    }
-}
-
-#[derive(Component)]
-pub struct BarCamera;
