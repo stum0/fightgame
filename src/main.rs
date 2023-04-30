@@ -9,6 +9,8 @@ use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
 use components::*;
 use log::Level;
+use nostr_sdk::prelude::{Bech32Writer, ToBech32};
+use nostr_sdk::secp256k1::XOnlyPublicKey;
 use nostr_sdk::{
     serde_json, Client, ClientMessage, EventBuilder, Filter, Keys, RelayPoolNotification, Tag,
     Timestamp,
@@ -53,7 +55,7 @@ pub fn main() {
         }))
         .add_plugin(EguiPlugin)
         .add_system(menu.run_if(in_state(GameState::Menu)))
-        .add_system(find_game.in_schedule(OnEnter(GameState::FindGameMenu)))
+        .add_system(find_game.run_if(in_state(GameState::FindGameMenu)))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_system(start_matchbox_socket.in_schedule(OnEnter(GameState::Matchmaking)))
         .add_systems((
@@ -79,6 +81,7 @@ pub fn main() {
         .insert_resource(GameName {
             name: String::new(),
         })
+        .insert_resource(GamesList(Arc::new(Mutex::new(Vec::new()))))
         .run();
 }
 
@@ -99,6 +102,9 @@ struct LocalPlayerHandle(usize);
 pub struct GameName {
     pub name: String,
 }
+
+#[derive(Resource)]
+pub struct GamesList(pub Arc<Mutex<Vec<String>>>);
 
 #[derive(AssetCollection, Resource)]
 pub struct ImageAssets {
@@ -134,12 +140,10 @@ fn menu(
     mut game_name: ResMut<GameName>,
 ) {
     let nostr = nostr_query.iter().next().unwrap();
+
     let window = window.iter().next().unwrap();
-
     let screen_size = egui::Vec2::new(window.width(), window.height());
-
     let screen_center = screen_size / 2.0;
-
     let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
 
     egui::Window::new("cool game name")
@@ -153,7 +157,7 @@ fn menu(
                     .id(egui::Id::new("game_name_input")),
             );
 
-            if ui.button("Create Game").clicked() {
+            if ui.button("Create Game").clicked() && !game_name.name.is_empty() {
                 //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
                 let game_name = game_name.name.clone();
                 let nostr_keys = nostr.keys.clone();
@@ -190,42 +194,77 @@ fn menu(
         });
 }
 
-fn find_game(nostr_query: Query<&Nostr>) {
+fn find_game(
+    nostr_query: Query<&Nostr>,
+    mut contexts: EguiContexts,
+    window: Query<&Window>,
+    games_list: Res<GamesList>,
+) {
+    let window = window.iter().next().unwrap();
+    let screen_size = egui::Vec2::new(window.width(), window.height());
+    let screen_center = screen_size / 2.0;
+    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
+
     let nostr = nostr_query.iter().next().unwrap();
     let nostr_keys = nostr.keys.clone();
     let relay = nostr.relay.clone();
 
-    info!("connecting to nostr relay: {:?}", relay);
-    spawn_local(async move {
-        let tag = "matchbox-nostr-v1";
+    //info!("GAME FOUND {:?}", games_lock);
+    egui::Window::new("web21")
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(pos)
+        .show(contexts.ctx_mut(), |ui| {
+            if ui.button("Search for games").clicked() {
+                let games_handle = games_list.0.clone();
+                info!("connecting to nostr relay: {:?}", relay);
+                spawn_local(async move {
+                    let tag = "matchbox-nostr-v1";
 
-        info!("LOOKING FOR GAMES");
+                    info!("LOOKING FOR GAMES");
 
-        let client = Client::new(&nostr_keys);
-        #[cfg(target_arch = "wasm32")]
-        client.add_relay(&relay).await.unwrap();
+                    let client = Client::new(&nostr_keys);
+                    #[cfg(target_arch = "wasm32")]
+                    client.add_relay(&relay).await.unwrap();
 
-        client.connect().await;
-        //send sub message
+                    client.connect().await;
+                    //send sub message
 
-        let subscription = Filter::new().since(Timestamp::now()).hashtag(tag);
+                    let subscription = Filter::new().since(Timestamp::now()).hashtag(tag);
 
-        client.subscribe(vec![subscription]).await;
+                    client.subscribe(vec![subscription]).await;
 
-        client
-            .handle_notifications(|notification| async {
-                if let RelayPoolNotification::Event(_url, event) = notification {
-                    info!("{:?}", event.content);
-                    let game: String =
-                        serde_json::from_str(&event.content).expect("deserializing request");
+                    client
+                        .handle_notifications(move |notification| {
+                            let games = games_handle.clone();
+                            async move {
+                                if let RelayPoolNotification::Event(_url, event) = notification {
+                                    info!("{:?}", event.content);
+                                    let game: String = serde_json::from_str(&event.content)
+                                        .expect("deserializing request");
 
-                    info!("GAME FOUND {:?}", game);
-                }
-                Ok(())
-            })
-            .await
-            .unwrap();
-    });
+                                    let mut games_lock = games.lock().unwrap();
+
+                                    let game = format!(
+                                        "Game Name: {}, Created by: {:?}",
+                                        game,
+                                        event.pubkey.to_bech32().unwrap()
+                                    );
+                                    games_lock.push(game);
+                                }
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                });
+            }
+
+            let games_lock = games_list.0.lock().unwrap();
+            for game in games_lock.iter() {
+                if ui.button(game).clicked() {}
+            }
+        });
 }
 
 fn spawn_players(
