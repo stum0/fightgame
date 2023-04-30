@@ -1,13 +1,18 @@
+use std::sync::{Arc, Mutex};
+
 use bevy::render::camera::ScalingMode;
 use bevy::{prelude::*, window::Window};
 use bevy_asset_loader::prelude::*;
-use bevy_egui::egui::Pos2;
+use bevy_egui::egui::{Pos2, TextEdit};
 use bevy_ggrs::ggrs::PlayerType;
 use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
 use components::*;
 use log::Level;
-use nostr_sdk::{serde_json, Client, ClientMessage, EventBuilder, Keys, Tag};
+use nostr_sdk::{
+    serde_json, Client, ClientMessage, EventBuilder, Filter, Keys, RelayPoolNotification, Tag,
+    Timestamp,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
 mod components;
@@ -48,6 +53,7 @@ pub fn main() {
         }))
         .add_plugin(EguiPlugin)
         .add_system(menu.run_if(in_state(GameState::Menu)))
+        .add_system(find_game.in_schedule(OnEnter(GameState::FindGameMenu)))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_system(start_matchbox_socket.in_schedule(OnEnter(GameState::Matchmaking)))
         .add_systems((
@@ -70,6 +76,9 @@ pub fn main() {
                 .in_schedule(GGRSSchedule),
         )
         .add_system(update_facing)
+        .insert_resource(GameName {
+            name: String::new(),
+        })
         .run();
 }
 
@@ -78,12 +87,18 @@ enum GameState {
     #[default]
     AssetLoading,
     Menu,
+    FindGameMenu,
     Matchmaking,
     InGame,
 }
 
 #[derive(Resource)]
 struct LocalPlayerHandle(usize);
+
+#[derive(Resource, Default, Debug)]
+pub struct GameName {
+    pub name: String,
+}
 
 #[derive(AssetCollection, Resource)]
 pub struct ImageAssets {
@@ -116,60 +131,101 @@ fn menu(
     window: Query<&Window>,
     mut next_state: ResMut<NextState<GameState>>,
     nostr_query: Query<&Nostr>,
+    mut game_name: ResMut<GameName>,
 ) {
     let nostr = nostr_query.iter().next().unwrap();
-    for window in window.iter() {
-        let menu_window_id = egui::Id::new("cool_game_menu");
+    let window = window.iter().next().unwrap();
 
-        let screen_size = egui::Vec2::new(window.width(), window.height());
+    let screen_size = egui::Vec2::new(window.width(), window.height());
 
-        let screen_center = screen_size / 2.0;
+    let screen_center = screen_size / 2.0;
 
-        let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
+    let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
 
-        egui::Window::new("cool game name")
-            .resizable(false)
-            .collapsible(false)
-            .fixed_pos(pos)
-            .id(menu_window_id)
-            .show(contexts.ctx_mut(), |ui| {
-                if ui.button("Create Game").clicked() {
-                    //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
+    egui::Window::new("cool game name")
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(pos)
+        .show(contexts.ctx_mut(), |ui| {
+            ui.add(
+                TextEdit::singleline(&mut game_name.name)
+                    .hint_text("Enter game name")
+                    .id(egui::Id::new("game_name_input")),
+            );
 
-                    let nostr_keys = nostr.keys.clone();
-                    let relay = nostr.relay.clone();
+            if ui.button("Create Game").clicked() {
+                //let room_url = "ws://127.0.0.1:5000/nostrclient/api/v1/relay";
+                let game_name = game_name.name.clone();
+                let nostr_keys = nostr.keys.clone();
+                let relay = nostr.relay.clone();
 
-                    info!("connecting to nostr relay: {:?}", relay);
+                info!("connecting to nostr relay: {:?}", relay);
 
-                    //list game
-                    spawn_local(async move {
-                        let pub_key = PeerId(nostr_keys.public_key());
-                        let tag = "matchbox-nostr-1";
-                        let new_peer = PeerEvent::NewPeer(pub_key);
-                        let new_peer =
-                            serde_json::to_string(&new_peer).expect("serializing request");
+                //list game
+                spawn_local(async move {
+                    let tag = "matchbox-nostr-v1";
+                    let new_game = serde_json::to_string(&game_name).expect("serializing request");
 
-                        let broadcast_peer = ClientMessage::new_event(
-                            EventBuilder::new_text_note(new_peer, &[Tag::Hashtag(tag.to_string())])
-                                .to_event(&nostr_keys)
-                                .unwrap(),
-                        );
+                    let broadcast_peer = ClientMessage::new_event(
+                        EventBuilder::new_text_note(new_game, &[Tag::Hashtag(tag.to_string())])
+                            .to_event(&nostr_keys)
+                            .unwrap(),
+                    );
 
-                        warn!("BROADCAST PEER ID {:?}", broadcast_peer);
+                    warn!("LIST GAME {:?}", broadcast_peer);
 
-                        let client = Client::new(&nostr_keys);
-                        #[cfg(target_arch = "wasm32")]
-                        client.add_relay(&relay).await.unwrap();
+                    let client = Client::new(&nostr_keys);
+                    #[cfg(target_arch = "wasm32")]
+                    client.add_relay(&relay).await.unwrap();
 
-                        client.connect().await;
-                        client.send_msg(broadcast_peer).await.unwrap();
-                        client.disconnect().await.unwrap();
-                    });
-                    next_state.set(GameState::Matchmaking);
+                    client.connect().await;
+                    client.send_msg(broadcast_peer).await.unwrap();
+                    client.disconnect().await.unwrap();
+                });
+                next_state.set(GameState::Matchmaking);
+            }
+            if ui.button("Find Game").clicked() {
+                next_state.set(GameState::FindGameMenu);
+            };
+        });
+}
+
+fn find_game(nostr_query: Query<&Nostr>) {
+    let nostr = nostr_query.iter().next().unwrap();
+    let nostr_keys = nostr.keys.clone();
+    let relay = nostr.relay.clone();
+
+    info!("connecting to nostr relay: {:?}", relay);
+    spawn_local(async move {
+        let tag = "matchbox-nostr-v1";
+
+        info!("LOOKING FOR GAMES");
+
+        let client = Client::new(&nostr_keys);
+        #[cfg(target_arch = "wasm32")]
+        client.add_relay(&relay).await.unwrap();
+
+        client.connect().await;
+        //send sub message
+
+        let subscription = Filter::new().since(Timestamp::now()).hashtag(tag);
+
+        client.subscribe(vec![subscription]).await;
+
+        client
+            .handle_notifications(|notification| async {
+                if let RelayPoolNotification::Event(_url, event) = notification {
+                    info!("{:?}", event.content);
+                    let game: String =
+                        serde_json::from_str(&event.content).expect("deserializing request");
+
+                    info!("GAME FOUND {:?}", game);
                 }
-                if ui.button("Find Game").clicked() {};
-            });
-    }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    });
 }
 
 fn spawn_players(
