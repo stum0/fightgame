@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bevy::render::camera::ScalingMode;
 use bevy::{prelude::*, window::Window};
@@ -9,7 +10,7 @@ use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
 use components::*;
 use log::Level;
-use nostr_sdk::prelude::{Bech32Writer, ToBech32};
+use nostr_sdk::prelude::{FromBech32, ToBech32};
 use nostr_sdk::secp256k1::XOnlyPublicKey;
 use nostr_sdk::{
     serde_json, Client, ClientMessage, EventBuilder, Filter, Keys, RelayPoolNotification, Tag,
@@ -104,7 +105,7 @@ pub struct GameName {
 }
 
 #[derive(Resource)]
-pub struct GamesList(pub Arc<Mutex<Vec<String>>>);
+pub struct GamesList(pub Arc<Mutex<Vec<Game>>>);
 
 #[derive(AssetCollection, Resource)]
 pub struct ImageAssets {
@@ -126,9 +127,23 @@ impl ggrs::Config for GgrsConfig {
     // Matchbox' WebRtcSocket addresses are called `PeerId`s
     type Address = PeerId;
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Game {
+    pub name: String,
+    pub created_by: String,
+}
+
+impl Game {
+    pub fn display_name(&self) -> String {
+        format!("Game Name: {}, Created by: {}", self.name, self.created_by)
+    }
+}
+
 fn create_nostr_key(mut commands: Commands) {
     let keys = Keys::generate();
     let relay = "wss://nostr.lu.ke".to_string();
+    //let relay = "ws://localhost:8080".to_string();
     commands.spawn(Nostr { relay, keys });
 }
 
@@ -146,7 +161,7 @@ fn menu(
     let screen_center = screen_size / 2.0;
     let pos = Pos2::new(screen_center.x, screen_center.y / 2.0);
 
-    egui::Window::new("cool game name")
+    egui::Window::new("web21")
         .resizable(false)
         .collapsible(false)
         .fixed_pos(pos)
@@ -199,6 +214,7 @@ fn find_game(
     mut contexts: EguiContexts,
     window: Query<&Window>,
     games_list: Res<GamesList>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
     let window = window.iter().next().unwrap();
     let screen_size = egui::Vec2::new(window.width(), window.height());
@@ -230,7 +246,9 @@ fn find_game(
                     client.connect().await;
                     //send sub message
 
-                    let subscription = Filter::new().since(Timestamp::now()).hashtag(tag);
+                    let subscription = Filter::new()
+                        .since(Timestamp::now() - Duration::from_secs(60))
+                        .hashtag(tag);
 
                     client.subscribe(vec![subscription]).await;
 
@@ -240,16 +258,15 @@ fn find_game(
                             async move {
                                 if let RelayPoolNotification::Event(_url, event) = notification {
                                     info!("{:?}", event.content);
-                                    let game: String = serde_json::from_str(&event.content)
+                                    let game_name: String = serde_json::from_str(&event.content)
                                         .expect("deserializing request");
 
                                     let mut games_lock = games.lock().unwrap();
 
-                                    let game = format!(
-                                        "Game Name: {}, Created by: {:?}",
-                                        game,
-                                        event.pubkey.to_bech32().unwrap()
-                                    );
+                                    let game = Game {
+                                        name: game_name,
+                                        created_by: event.pubkey.to_bech32().unwrap(),
+                                    };
                                     games_lock.push(game);
                                 }
                                 Ok(())
@@ -262,7 +279,33 @@ fn find_game(
 
             let games_lock = games_list.0.lock().unwrap();
             for game in games_lock.iter() {
-                if ui.button(game).clicked() {}
+                let list_game = format!("GAME NAME: {} CREATED BY: {}", game.name, game.created_by);
+                if ui.button(list_game).clicked() {
+                    //send nostr dm with peer id to game creator
+                    let reciever = XOnlyPublicKey::from_bech32(game.clone().created_by).unwrap();
+
+                    let nostr_keys = nostr.keys.clone();
+                    let relay = nostr.relay.clone();
+
+                    info!("connecting to nostr relay: {:?}", relay);
+
+                    //list game
+                    spawn_local(async move {
+                        let pub_key = PeerId(nostr_keys.public_key());
+                        let new_peer = PeerEvent::NewPeer(pub_key);
+                        let new_peer =
+                            serde_json::to_string(&new_peer).expect("serializing request");
+
+                        let client = Client::new(&nostr_keys);
+                        #[cfg(target_arch = "wasm32")]
+                        client.add_relay(&relay).await.unwrap();
+
+                        client.connect().await;
+                        client.send_direct_msg(reciever, new_peer).await.unwrap();
+                        client.disconnect().await.unwrap();
+                    });
+                    next_state.set(GameState::Matchmaking);
+                }
             }
         });
 }
