@@ -1,8 +1,8 @@
-use bevy::{math::Vec3Swizzles, prelude::*};
+use bevy::{math::Vec3Swizzles, prelude::*, time, utils::Instant};
 use bevy_ggrs::{PlayerInputs, RollbackIdProvider};
 
 use crate::{
-    components::{Bullet, BulletDistance, BulletReady, Despawned, MoveDir, Player},
+    components::{Bullet, BulletDistance, BulletReady, Despawned, Health, MoveDir, Player},
     input::fire,
     GgrsConfig, ImageAssets,
 };
@@ -18,12 +18,12 @@ pub fn fire_bullets(
     mut player_query: Query<(&Transform, &mut Player, &mut BulletReady, &mut MoveDir)>,
     mut rip: ResMut<RollbackIdProvider>,
 ) {
-    for (transform, mut player, mut bullet_ready, mut move_dir) in player_query.iter_mut() {
+    for (transform, mut player, mut bullet, mut move_dir) in player_query.iter_mut() {
         let (input, _) = inputs[player.handle];
 
         let mouse_position = Vec2::new(input.target_x, input.target_y);
 
-        if fire(input) && bullet_ready.0 {
+        if fire(input) && bullet.ready {
             let player_pos = transform.translation.xy();
             let direction_to_mouse = (mouse_position - player_pos).normalize();
             let pos = player_pos + direction_to_mouse * PLAYER_RADIUS + BULLET_RADIUS;
@@ -52,7 +52,7 @@ pub fn fire_bullets(
                     ..default()
                 },
             ));
-            bullet_ready.0 = false;
+            bullet.ready = false;
         }
     }
 }
@@ -60,11 +60,17 @@ pub fn fire_bullets(
 pub fn reload_bullet(
     inputs: Res<PlayerInputs<GgrsConfig>>,
     mut query: Query<(&mut BulletReady, &Player)>,
+    time: Res<Time>,
 ) {
     for (mut can_fire, player) in query.iter_mut() {
         let (input, _) = inputs[player.handle];
-        if !fire(input) {
-            can_fire.0 = true;
+
+        can_fire.timer.tick(time.delta());
+
+        if can_fire.timer.finished() && !fire(input) {
+            // Reset the timer
+            can_fire.ready = true;
+            can_fire.timer.reset();
         }
     }
 }
@@ -88,11 +94,11 @@ pub fn move_bullet(
 
 pub fn kill_players(
     mut commands: Commands,
-    mut player_query: Query<(&Transform, &Player), Without<Bullet>>,
+    mut player_query: Query<(Entity, &Transform, &Player, &mut Health), Without<Bullet>>,
 
     bullet_query: Query<(Entity, &Transform, &Bullet), With<Bullet>>,
 ) {
-    for (player_transform, player_info) in player_query.iter_mut() {
+    for (player, player_transform, player_info, mut health) in player_query.iter_mut() {
         for (bullet, bullet_transform, bullet_info) in bullet_query.iter() {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
@@ -102,11 +108,12 @@ pub fn kill_players(
 
             if distance < PLAYER_RADIUS + BULLET_RADIUS && bullet_info.shooter != player_info.handle
             {
-                // if health.current > 0 {
-                //     health.current -= 1;
-                // } else {
-                //     health.current = 6;
-                // }
+                health.current -= 1;
+                if health.current == 0 {
+                    commands.entity(player).despawn();
+                    info!("Player {} died", player_info.handle);
+                }
+
                 commands.entity(bullet).despawn();
             }
         }

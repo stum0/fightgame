@@ -1,6 +1,3 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
 use bevy::render::camera::ScalingMode;
 use bevy::{prelude::*, window::Window};
 use bevy_asset_loader::prelude::*;
@@ -8,6 +5,7 @@ use bevy_egui::egui::{Pos2, TextEdit};
 use bevy_ggrs::ggrs::PlayerType;
 use bevy_ggrs::{ggrs, GGRSPlugin, GGRSSchedule, RollbackIdProvider, Session};
 use bevy_matchbox_nostr::prelude::*;
+use bevy_mod_simplest_healthbar::{HealthBar, HealthBarPlugin};
 use components::*;
 use log::Level;
 use nostr_sdk::prelude::{FromBech32, ToBech32};
@@ -17,6 +15,8 @@ use nostr_sdk::{
     Timestamp,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use wasm_bindgen_futures::spawn_local;
 mod components;
 use spells::*;
@@ -55,6 +55,12 @@ pub fn main() {
             ..default()
         }))
         .add_plugin(EguiPlugin)
+        .add_plugin(
+            // Need to define which camera we are going to be spawning the stuff in relation to, as well as what is the "health" component
+            HealthBarPlugin::<Health, BarCamera>::new("fonts/quicksand-light.ttf")
+                // to automatically spawn bars on stuff with Health and a Transform
+                .automatic_bar_creation(true),
+        )
         .add_system(menu.run_if(in_state(GameState::Menu)))
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .add_system(start_matchbox_socket.in_schedule(OnEnter(GameState::Matchmaking)))
@@ -181,7 +187,7 @@ fn menu(
                     .id(egui::Id::new("game_name_input")),
             );
 
-            if ui.button("Create Game").clicked() && !game_name.name.is_empty() {
+            if ui.small_button("Create Game").clicked() && !game_name.name.is_empty() {
                 let game_name = game_name.name.clone();
                 let nostr_keys = nostr.keys.clone();
                 let relay = nostr.relay.clone();
@@ -217,8 +223,6 @@ fn menu(
                 info!("connecting to nostr relay: {:?}", relay);
                 spawn_local(async move {
                     let tag = "matchbox-nostr-v1";
-
-                    info!("LOOKING FOR GAMES");
 
                     let client = Client::new(&nostr_keys);
                     #[cfg(target_arch = "wasm32")]
@@ -299,6 +303,51 @@ fn menu(
         });
 }
 
+// fn action_bar(
+//     mut contexts: EguiContexts,
+//     mut player_query: Query<(&Transform, &Player, &mut Health)>,
+//     window: Query<&Window>,
+// ) {
+//     let window = window.iter().next().unwrap();
+//     let width = window.width();
+//     let height = window.height();
+
+//     for (transform, player, health) in player_query.iter_mut() {
+//         let location = transform.translation.to_;
+//         info!("location: {:?}", location);
+//         let bevy_x = location.x;
+//         let bevy_y = location.y;
+//         let (egui_x, egui_y) = bevy_to_egui_coordinates(bevy_x, bevy_y, width, height);
+
+//         let label_position = egui::Pos2::new(egui_x, egui_y);
+//         info!("pos2: {:?}", label_position);
+//         egui::CentralPanel::default()
+//             .frame(egui::Frame::none())
+//             .show(contexts.ctx_mut(), |ui| {
+//                 if player.handle == 0 {
+//                     let mut p1 = format!("P1: {}", health.0);
+//                     ui.put(
+//                         egui::Rect {
+//                             min: label_position,
+//                             max: label_position + egui::Vec2::new(100.0, 100.0),
+//                         },
+//                         TextEdit::singleline(&mut p1),
+//                     );
+//                     ui.label(p1);
+//                 } else {
+//                     let p2 = format!("P2: {}", health.0);
+//                     ui.label(p2);
+//                 }
+//             });
+//     }
+// }
+
+// fn bevy_to_egui_coordinates(bevy_x: f32, bevy_y: f32, width: f32, height: f32) -> (f32, f32) {
+//     let egui_x = bevy_x + (width / 2.0);
+//     let egui_y = (height / 2.0) - bevy_y;
+//     (egui_x, egui_y)
+// }
+
 fn spawn_players(
     mut commands: Commands,
     mut rip: ResMut<RollbackIdProvider>,
@@ -306,7 +355,7 @@ fn spawn_players(
 ) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
-    commands.spawn(camera_bundle);
+    commands.spawn((camera_bundle, BarCamera));
 
     //player 1
     let p1_position = Vec2::new(-5.0, 0.0);
@@ -317,10 +366,21 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(Vec2::X),
-        BulletReady(true),
+        BulletReady {
+            timer: Timer::from_seconds(1.0, TimerMode::Once),
+            ready: true,
+        },
         Target::default(),
         rip.next(),
-        // Create custom size and color and offset for the "bar"
+        Health {
+            current: 21,
+            max: 21,
+        },
+        HealthBar {
+            offset: Vec2::new(0., 30.),
+            size: 20.,
+            color: Color::GREEN,
+        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(0., 0.47, 1.),
@@ -341,9 +401,21 @@ fn spawn_players(
             moving: false,
         },
         MoveDir(-Vec2::X),
-        BulletReady(true),
+        BulletReady {
+            timer: Timer::from_seconds(1.0, TimerMode::Once),
+            ready: true,
+        },
         Target::default(),
         rip.next(),
+        Health {
+            current: 21,
+            max: 21,
+        },
+        HealthBar {
+            offset: Vec2::new(0., 30.),
+            size: 20.,
+            color: Color::GREEN,
+        },
         SpriteBundle {
             sprite: Sprite {
                 //color: Color::rgb(1., 0.47, 0.),
