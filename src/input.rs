@@ -135,7 +135,6 @@ pub fn get_touch_position(
 pub fn move_system(
     mut query: Query<(&mut Transform, &mut Target, &mut Player, &mut MoveDir), With<Rollback>>,
     inputs: Res<PlayerInputs<GgrsConfig>>,
-    time: Res<Time>,
 ) {
     for (mut t, mut tg, mut p, mut move_dir) in query.iter_mut() {
         let input = inputs[p.handle].0.inp;
@@ -155,9 +154,9 @@ pub fn move_system(
             let distance_to_target = direction.length();
 
             if distance_to_target > 0.0 {
-                let player_speed = 5.0;
+                let player_speed = 0.05;
                 let normalized_direction = direction / distance_to_target;
-                let movement = normalized_direction * player_speed * time.delta_seconds();
+                let movement = normalized_direction * player_speed;
 
                 if movement.length() < distance_to_target {
                     t.translation += Vec3::new(movement.x, movement.y, 0.0);
@@ -167,25 +166,14 @@ pub fn move_system(
                 }
                 if normalized_direction.x > 0.0 {
                     move_dir.0 = Vec2::X;
-                    p.facing_right = true;
+                    t.rotation = Quat::from_rotation_y(std::f32::consts::PI);
                 } else {
                     move_dir.0 = -Vec2::X;
-                    p.facing_right = false;
+                    t.rotation = Quat::from_rotation_y(0.0);
                 }
             } else {
                 p.moving = false;
             }
-        }
-    }
-}
-
-pub fn update_facing(mut player_query: Query<(&Player, &mut Transform)>) {
-    for (player, mut transform) in player_query.iter_mut() {
-        if player.facing_right {
-            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI); // Face right
-        } else {
-            transform.rotation = Quat::from_rotation_y(0.0);
-            // Face left
         }
     }
 }

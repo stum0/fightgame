@@ -4,13 +4,7 @@ use nostr_sdk::Keys;
 
 #[derive(Component, Reflect, Default)]
 pub struct BulletReady {
-    pub timer: Timer,
     pub ready: bool,
-}
-
-#[derive(Component, Reflect, Default)]
-pub struct BulletDistance {
-    pub traveled: f32,
 }
 
 #[derive(Component, Reflect, Default, Clone, Copy)]
@@ -18,7 +12,6 @@ pub struct MoveDir(pub Vec2);
 
 #[derive(Component)]
 pub struct Player {
-    pub facing_right: bool,
     pub handle: usize,
     pub moving: bool,
 }
@@ -32,6 +25,7 @@ pub struct Target {
 #[derive(Component, Reflect, Default)]
 pub struct Bullet {
     pub shooter: usize,
+    pub traveled: f32,
 }
 
 #[derive(Component)]

@@ -32,10 +32,12 @@ pub fn main() {
 
     GGRSPlugin::<GgrsConfig>::new()
         .with_input_system(input)
-        .register_rollback_component::<Transform>()
-        .register_rollback_component::<Target>()
-        .register_rollback_component::<BulletReady>()
-        .register_rollback_component::<MoveDir>()
+        // .register_rollback_component::<Bullet>()
+        // .register_rollback_component::<Health>()
+        // .register_rollback_component::<Transform>()
+        // .register_rollback_component::<Target>()
+        // .register_rollback_component::<BulletReady>()
+        // .register_rollback_component::<MoveDir>()
         .build(&mut app);
 
     app.add_state::<GameState>()
@@ -75,15 +77,13 @@ pub fn main() {
         .add_systems(
             (
                 move_system,
-                reload_bullet.after(move_system),
-                fire_bullets.after(move_system).after(reload_bullet),
+                fire_bullets.after(move_system),
+                reload_bullet.after(fire_bullets),
                 move_bullet.after(fire_bullets),
-                kill_players.after(move_bullet),
-                // respawn_players.after(kill_players),
+                kill_players.after(move_bullet).after(move_system),
             )
                 .in_schedule(GGRSSchedule),
         )
-        .add_system(update_facing)
         .insert_resource(GameName {
             name: String::new(),
         })
@@ -357,24 +357,22 @@ fn spawn_players(
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
     commands.spawn((camera_bundle, BarCamera));
 
+    let p1_rotation = Quat::from_rotation_y(std::f32::consts::PI);
+
     //player 1
     let p1_position = Vec2::new(-5.0, 0.0);
     commands.spawn((
         Player {
-            facing_right: true,
             handle: 0,
             moving: false,
         },
         MoveDir(Vec2::X),
-        BulletReady {
-            timer: Timer::from_seconds(1.0, TimerMode::Once),
-            ready: true,
-        },
+        BulletReady { ready: true },
         Target::default(),
         rip.next(),
         Health {
-            current: 21,
-            max: 21,
+            current: 99,
+            max: 99,
         },
         HealthBar {
             offset: Vec2::new(0., 30.),
@@ -383,12 +381,12 @@ fn spawn_players(
         },
         SpriteBundle {
             sprite: Sprite {
-                //color: Color::rgb(0., 0.47, 1.),
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
             texture: images.player_1.clone(),
-            transform: Transform::from_xyz(p1_position.x, p1_position.y, 0.0),
+            transform: Transform::from_xyz(p1_position.x, p1_position.y, 0.0)
+                .with_rotation(p1_rotation),
             ..Default::default()
         },
     ));
@@ -396,20 +394,16 @@ fn spawn_players(
     let p2_position = Vec2::new(5.0, 0.0);
     commands.spawn((
         Player {
-            facing_right: false,
             handle: 1,
             moving: false,
         },
         MoveDir(-Vec2::X),
-        BulletReady {
-            timer: Timer::from_seconds(1.0, TimerMode::Once),
-            ready: true,
-        },
+        BulletReady { ready: true },
         Target::default(),
         rip.next(),
         Health {
-            current: 21,
-            max: 21,
+            current: 99,
+            max: 99,
         },
         HealthBar {
             offset: Vec2::new(0., 30.),
@@ -418,7 +412,6 @@ fn spawn_players(
         },
         SpriteBundle {
             sprite: Sprite {
-                //color: Color::rgb(1., 0.47, 0.),
                 custom_size: Some(Vec2::new(1., 1.)),
                 ..Default::default()
             },
@@ -539,6 +532,9 @@ fn log_ggrs_events(mut session: ResMut<Session<GgrsConfig>>) {
             for event in s.events() {
                 info!("GGRS Event: {:?}", event);
             }
+            let frame = s.frames_ahead();
+
+            info!("GGRS FRAME: {:?}", frame);
         }
         _ => panic!("This example focuses on p2p."),
     }
