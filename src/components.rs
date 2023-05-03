@@ -26,6 +26,8 @@ pub struct Target {
 pub struct Bullet {
     pub shooter: usize,
     pub traveled: f32,
+    pub despawned: bool,
+    pub hit: bool,
 }
 
 #[derive(Component)]

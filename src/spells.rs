@@ -37,6 +37,8 @@ pub fn fire_bullets(
                 Bullet {
                     shooter: player.handle,
                     traveled: 0.0,
+                    despawned: false,
+                    hit: false,
                 },
                 rip.next(),
                 MoveDir(direction_to_mouse),
@@ -74,41 +76,59 @@ pub fn move_bullet(
     mut query: Query<(Entity, &mut Transform, &MoveDir, &mut Bullet)>,
 ) {
     for (bullet, mut transform, dir, mut bullet_info) in query.iter_mut() {
-        // if bullet_info.traveled < 3.0 {
-        let delta = (dir.0 * BULLET_SPEED).extend(0.);
-        transform.translation += delta;
+        if bullet_info.traveled <= 5.0 {
+            // let delta = (dir.0 * BULLET_SPEED).extend(0.);
+            transform.translation += (dir.0).extend(0.);
 
-        // Update the traveled distance
-        bullet_info.traveled += BULLET_SPEED;
-        // } else {
-        //     commands.entity(bullet).despawn();
-        // }
+            // Update the traveled distance
+            bullet_info.traveled += 0.3;
+        } else {
+            bullet_info.hit = false;
+            bullet_info.despawned = true;
+            commands.entity(bullet).despawn();
+        }
     }
 }
 
 pub fn kill_players(
     mut commands: Commands,
-    mut player_query: Query<(Entity, &Transform, &Player, &mut Health)>,
-    bullet_query: Query<(Entity, &Transform, &mut Bullet)>,
+    mut player_query: Query<(&Transform, &Player, &Health)>,
+    mut bullet_query: Query<(Entity, &Transform, &mut Bullet)>,
 ) {
-    for (_player, player_transform, player_info, mut health) in player_query.iter_mut() {
-        for (bullet, bullet_transform, bullet_info) in bullet_query.iter() {
+    for (player_transform, player_info, health) in player_query.iter_mut() {
+        for (bullet, bullet_transform, mut bullet_info) in bullet_query.iter_mut() {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
                 bullet_transform.translation.xy(),
             );
-            // Check if the bullet's shooter handle is different from the player's handle
 
             if distance < PLAYER_RADIUS + BULLET_RADIUS && bullet_info.shooter != player_info.handle
             {
-                health.current -= 1;
-                if health.current == 0 {
-                    health.current = health.max;
-                    // commands.entity(player).despawn();
-                    info!("Player {} died", player_info.handle);
-                };
-
                 commands.entity(bullet).despawn();
+                bullet_info.hit = true;
+                bullet_info.despawned = true;
+            }
+        }
+    }
+}
+
+pub fn update_health(
+    mut player_query: Query<(Entity, &Player, &mut Health)>,
+    bullet_query: Query<&mut Bullet>,
+    mut commands: Commands,
+) {
+    for (player, player_info, mut health) in player_query.iter_mut() {
+        if health.current == 0 {
+            commands.entity(player).despawn();
+            info!("Player {} died", player_info.handle);
+        }
+        for bullet in bullet_query.iter() {
+            if bullet.shooter != player_info.handle {
+                if bullet.despawned && bullet.hit {
+                    health.current -= 1;
+                } else if bullet.despawned && !bullet.hit && health.current != health.max {
+                    health.current += 1;
+                }
             }
         }
     }

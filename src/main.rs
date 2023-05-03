@@ -80,6 +80,7 @@ pub fn main() {
                 reload_bullet.after(fire_bullets),
                 move_bullet.after(fire_bullets),
                 kill_players.after(move_bullet).after(move_system),
+                update_health.after(kill_players),
             )
                 .in_schedule(GGRSSchedule),
         )
@@ -231,7 +232,7 @@ fn menu(
                     //send sub message
 
                     let subscription = Filter::new()
-                        .since(Timestamp::now() - Duration::from_secs(60))
+                        .since(Timestamp::now() - Duration::from_secs(30))
                         .hashtag(tag);
 
                     client.subscribe(vec![subscription]).await;
@@ -370,8 +371,8 @@ fn spawn_players(
         Target::default(),
         rip.next(),
         Health {
-            current: 99,
-            max: 99,
+            current: 21,
+            max: 21,
         },
         HealthBar {
             offset: Vec2::new(0., 30.),
@@ -401,8 +402,8 @@ fn spawn_players(
         Target::default(),
         rip.next(),
         Health {
-            current: 99,
-            max: 99,
+            current: 21,
+            max: 21,
         },
         HealthBar {
             offset: Vec2::new(0., 30.),
