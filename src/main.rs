@@ -1,4 +1,5 @@
 use bevy::render::camera::ScalingMode;
+
 use bevy::{prelude::*, window::Window};
 use bevy_asset_loader::prelude::*;
 use bevy_egui::egui::{Pos2, TextEdit};
@@ -481,7 +482,7 @@ fn wait_for_players(
     // create a GGRS P2P session
     let mut session_builder = ggrs::SessionBuilder::<GgrsConfig>::new()
         .with_num_players(2)
-        .with_input_delay(2);
+        .with_input_delay(8);
 
     for (i, player) in players.into_iter().enumerate() {
         if player == PlayerType::Local {
