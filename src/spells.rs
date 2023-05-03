@@ -74,15 +74,15 @@ pub fn move_bullet(
     mut query: Query<(Entity, &mut Transform, &MoveDir, &mut Bullet)>,
 ) {
     for (bullet, mut transform, dir, mut bullet_info) in query.iter_mut() {
-        if bullet_info.traveled < 3.0 {
-            let delta = (dir.0 * BULLET_SPEED).extend(0.);
-            transform.translation += delta;
+        // if bullet_info.traveled < 3.0 {
+        let delta = (dir.0 * BULLET_SPEED).extend(0.);
+        transform.translation += delta;
 
-            // Update the traveled distance
-            bullet_info.traveled += BULLET_SPEED;
-        } else {
-            commands.entity(bullet).despawn();
-        }
+        // Update the traveled distance
+        bullet_info.traveled += BULLET_SPEED;
+        // } else {
+        //     commands.entity(bullet).despawn();
+        // }
     }
 }
 
