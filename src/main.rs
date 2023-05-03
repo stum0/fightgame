@@ -34,7 +34,7 @@ pub fn main() {
         .with_input_system(input)
         // .register_rollback_component::<Bullet>()
         // .register_rollback_component::<Health>()
-        // .register_rollback_component::<Transform>()
+        .register_rollback_component::<Transform>()
         // .register_rollback_component::<Target>()
         // .register_rollback_component::<BulletReady>()
         // .register_rollback_component::<MoveDir>()
